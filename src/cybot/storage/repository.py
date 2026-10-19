@@ -10,8 +10,15 @@ from pathlib import Path
 from sqlalchemy import create_engine, event, func, select, tuple_
 from sqlalchemy.orm import Session, sessionmaker
 
+from cybot.intel.models import IntelResult
 from cybot.models import AlertCategory, AnalysisResult, NormalizedAlert, Severity
-from cybot.storage.orm import AlertRecord, AnalysisRecord, Base, IndicatorRecord
+from cybot.storage.orm import (
+    AlertRecord,
+    AnalysisRecord,
+    Base,
+    IndicatorRecord,
+    IntelCacheRecord,
+)
 
 
 def _naive_utc(dt: datetime) -> datetime:
@@ -154,6 +161,38 @@ class AlertRepository:
         )
         with self.db.session() as s:
             return [AnalysisResult.model_validate(r.payload) for r in s.scalars(query).all()]
+
+    # -- threat-intel cache -------------------------------------------------
+    def get_cached_intel(
+        self, provider: str, ioc_type: str, value: str, *, max_age: timedelta
+    ) -> IntelResult | None:
+        query = select(IntelCacheRecord).where(
+            IntelCacheRecord.provider == provider,
+            IntelCacheRecord.ioc_type == ioc_type,
+            IntelCacheRecord.value == value.lower(),
+            IntelCacheRecord.fetched_at >= _naive_utc(datetime.now(UTC) - max_age),
+        )
+        with self.db.session() as s:
+            record = s.scalars(query).first()
+            if record is None:
+                return None
+            return IntelResult.model_validate(record.payload).model_copy(update={"cached": True})
+
+    def put_cached_intel(self, result: IntelResult) -> None:
+        key = (result.provider, result.indicator_type.value, result.value.lower())
+        with self.db.session() as s:
+            record = s.scalars(
+                select(IntelCacheRecord).where(
+                    IntelCacheRecord.provider == key[0],
+                    IntelCacheRecord.ioc_type == key[1],
+                    IntelCacheRecord.value == key[2],
+                )
+            ).first()
+            if record is None:
+                record = IntelCacheRecord(provider=key[0], ioc_type=key[1], value=key[2])
+                s.add(record)
+            record.fetched_at = _naive_utc(result.fetched_at)
+            record.payload = result.model_dump(mode="json")
 
     @staticmethod
     def _to_record(alert: NormalizedAlert) -> AlertRecord:
