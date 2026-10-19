@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -38,6 +39,17 @@ class Settings(BaseSettings):
 
     # Correlation
     correlation_window_hours: int = 24
+
+    # Threat intelligence enrichment
+    intel_enabled: bool = True
+    intel_local_path: Path | None = PROJECT_ROOT / "intel" / "local_iocs.csv"
+    abuseipdb_api_key: SecretStr | None = None
+    virustotal_api_key: SecretStr | None = None
+    greynoise_api_key: SecretStr | None = None
+    urlhaus_api_key: SecretStr | None = None
+    intel_timeout_seconds: float = 10.0
+    intel_cache_ttl_hours: int = 24
+    intel_max_lookups: int = 8  # indicators enriched per analysis
 
 
 @lru_cache
