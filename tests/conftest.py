@@ -92,6 +92,8 @@ def make_client(tmp_path):
                 "chroma_path": tmp_path / "chroma",
                 "knowledge_dir": KNOWLEDGE_DIR,
                 "intel_local_path": INTEL_FILE,
+                "response_policy_path": POLICY_FILE,
+                "checkpoint_path": tmp_path / "checkpoints.db",
                 "api_key": None,
                 **overrides,
             }
