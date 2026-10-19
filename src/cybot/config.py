@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.1:8b"
     llm_temperature: float = 0.0
     llm_timeout_seconds: float = 120.0
+    # Ollama defaults to a 2048-token context, which truncates RAG prompts.
+    ollama_num_ctx: int = 8192
 
     # RAG
     chroma_path: Path = PROJECT_ROOT / "data" / "chroma"

@@ -42,3 +42,33 @@ def knowledge_base(tmp_path):
     kb = KnowledgeBase(HashingEmbedder(), collection="test_kb", persist_path=tmp_path / "chroma")
     kb.index_directory(KNOWLEDGE_DIR)
     return kb
+
+
+class FakeLLM:
+    """Scripted StructuredLLM: responses keyed by schema name.
+
+    A value may be a model instance, a list (consumed one per call; last one repeats),
+    an exception instance (raised), or a callable taking the prompt.
+    """
+
+    model_name = "fake-llm"
+
+    def __init__(self, responses=None, default_error=None):
+        self.responses = dict(responses or {})
+        self.default_error = default_error
+        self.calls: list[tuple[str, str]] = []
+
+    def generate(self, schema, system, prompt):
+        name = schema.__name__
+        self.calls.append((name, prompt))
+        if name not in self.responses:
+            raise self.default_error or KeyError(f"no scripted response for {name}")
+        value = self.responses[name]
+        if isinstance(value, list):
+            value = value.pop(0) if len(value) > 1 else value[0]
+        if isinstance(value, Exception):
+            raise value
+        return value(prompt) if callable(value) else value
+
+    def called(self, name):
+        return [p for n, p in self.calls if n == name]
