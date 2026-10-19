@@ -37,7 +37,7 @@ class WazuhNormalizer(Normalizer):
         full_log = payload.get("full_log")
         return NormalizedAlert(
             source=self.source,
-            source_alert_id=str(payload.get("id") or rule.get("id") or "") or None,
+            source_alert_id=str(payload["id"]) if payload.get("id") else None,
             title=title,
             description=full_log,
             severity=_level_to_severity(to_int(rule.get("level"))),

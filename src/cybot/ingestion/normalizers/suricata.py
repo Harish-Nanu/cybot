@@ -36,7 +36,7 @@ class SuricataNormalizer(Normalizer):
 
         return NormalizedAlert(
             source=self.source,
-            source_alert_id=str(alert.get("signature_id") or payload.get("flow_id") or "") or None,
+            source_alert_id=_event_id(payload, alert),
             title=signature,
             description=f"Suricata rule {alert.get('signature_id')}: {category_label}"
             if category_label
@@ -55,3 +55,9 @@ class SuricataNormalizer(Normalizer):
             tags=["ids", "network"] + [str(c) for c in as_list(category_label)],
             raw=dict(payload),
         )
+
+
+def _event_id(payload: Mapping[str, Any], alert: Mapping[str, Any]) -> str | None:
+    # A flow can trigger several signatures, so the pair identifies one alert event.
+    flow_id = payload.get("flow_id")
+    return f"{flow_id}:{alert.get('signature_id')}" if flow_id else None

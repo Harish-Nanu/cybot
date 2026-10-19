@@ -55,6 +55,16 @@ class AlertRepository:
                 s.add(self._to_record(alert))
         return alerts
 
+    def existing_source_ids(self, source: str, source_alert_ids: Iterable[str]) -> set[str]:
+        ids = {i for i in source_alert_ids if i}
+        if not ids:
+            return set()
+        query = select(AlertRecord.source_alert_id).where(
+            AlertRecord.source == source, AlertRecord.source_alert_id.in_(ids)
+        )
+        with self.db.session() as s:
+            return set(s.scalars(query).all())
+
     def get_alert(self, alert_id: str) -> NormalizedAlert | None:
         with self.db.session() as s:
             record = s.get(AlertRecord, alert_id)
