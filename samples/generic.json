@@ -1,0 +1,14 @@
+[
+  {
+    "id": "mail-gw-55120",
+    "title": "Phishing email with malicious attachment delivered",
+    "description": "Message from billing@invoices-secure-pay.com to j.doe@corp.example with attachment Invoice_Oct.docm containing macro dropper. Link to http://invoices-secure-pay.com/view.php",
+    "severity": "high",
+    "category": "phishing",
+    "timestamp": "2026-10-18T08:55:00Z",
+    "username": "j.doe",
+    "hostname": "WS-FIN-07",
+    "mitre_techniques": ["T1566.001"],
+    "tags": ["email", "gateway"]
+  }
+]

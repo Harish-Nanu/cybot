@@ -26,6 +26,7 @@ _NOT_TLDS = {
     "exe", "dll", "bat", "ps1", "sh", "py", "js", "vbs", "txt", "log", "doc", "docx",
     "xls", "xlsx", "pdf", "zip", "rar", "tmp", "dat", "bin", "conf", "json", "xml",
     "html", "htm", "php", "jsp", "asp", "aspx", "png", "jpg", "gif", "lnk", "msi", "iso",
+    "docm", "xlsm", "ppt", "pptx", "rtf", "hta", "scr", "jar", "gz", "tar", "cab", "elf", "so",
 }  # fmt: skip
 
 

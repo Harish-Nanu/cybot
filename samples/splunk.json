@@ -1,0 +1,21 @@
+[
+  {
+    "sid": "scheduler__admin__search__RMD5e1a3d9c_at_1792324000_412",
+    "search_name": "Excessive Outbound Data Transfer",
+    "app": "SplunkEnterpriseSecuritySuite",
+    "owner": "admin",
+    "results_link": "https://splunk.local:8000/app/search/@go?sid=scheduler__admin__search",
+    "result": {
+      "_time": "2026-10-18T12:05:00+00:00",
+      "rule_name": "Excessive Outbound Data Transfer",
+      "rule_description": "Host WS-FIN-07 uploaded 4.2 GB to 198.51.100.77 within 30 minutes, exceeding baseline by 40x. Possible exfiltration.",
+      "src": "10.0.2.57",
+      "dest": "198.51.100.77",
+      "dest_port": "443",
+      "user": "j.doe",
+      "host": "WS-FIN-07",
+      "urgency": "high",
+      "mitre_technique_id": ["T1041"]
+    }
+  }
+]

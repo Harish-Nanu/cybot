@@ -1,0 +1,24 @@
+[
+  {
+    "metadata": {"customerIDString": "abc123", "offset": 88412, "eventType": "DetectionSummaryEvent", "eventCreationTime": 1792323722000},
+    "event": {
+      "DetectId": "ldt:8d2f0a1b2c3d4e5f:4295063101",
+      "DetectName": "Credential Dumping",
+      "DetectDescription": "A process attempted to access LSASS memory, consistent with Mimikatz credential theft.",
+      "Severity": 5,
+      "SeverityName": "Critical",
+      "ComputerName": "WS-FIN-07",
+      "UserName": "j.doe",
+      "LocalIP": "10.0.2.57",
+      "FileName": "mimikatz.exe",
+      "FilePath": "\\Device\\HarddiskVolume3\\Users\\j.doe\\AppData\\Local\\Temp\\mimikatz.exe",
+      "CommandLine": "mimikatz.exe \"privilege::debug\" \"sekurlsa::logonpasswords\" exit",
+      "SHA256String": "92804faaab2175dc501d73e814663058c78c0a042675a8937266357bcfb96c50",
+      "MD5String": "00000000000000000000000000000000",
+      "Tactic": "Credential Access",
+      "Technique": "OS Credential Dumping",
+      "TechniqueId": "T1003.001",
+      "ProcessStartTime": 1792323710
+    }
+  }
+]

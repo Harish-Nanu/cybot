@@ -1,0 +1,45 @@
+[
+  {
+    "timestamp": "2026-10-18T09:12:44.512345+0000",
+    "flow_id": 1873462837461234,
+    "in_iface": "eth0",
+    "event_type": "alert",
+    "src_ip": "203.0.113.45",
+    "src_port": 51234,
+    "dest_ip": "10.0.1.20",
+    "dest_port": 22,
+    "proto": "TCP",
+    "alert": {
+      "action": "allowed",
+      "gid": 1,
+      "signature_id": 2001219,
+      "rev": 20,
+      "signature": "ET SCAN Potential SSH Scan",
+      "category": "Attempted Information Leak",
+      "severity": 2,
+      "metadata": {"mitre_technique_id": ["T1046"]}
+    }
+  },
+  {
+    "timestamp": "2026-10-18T11:40:02.004211+0000",
+    "flow_id": 9921837461001,
+    "in_iface": "eth0",
+    "event_type": "alert",
+    "src_ip": "10.0.2.57",
+    "src_port": 49822,
+    "dest_ip": "198.51.100.77",
+    "dest_port": 443,
+    "proto": "TCP",
+    "http": {"hostname": "update-cdn-sync.net", "url": "/api/v2/beacon"},
+    "alert": {
+      "action": "allowed",
+      "gid": 1,
+      "signature_id": 2027865,
+      "rev": 3,
+      "signature": "ET MALWARE Cobalt Strike Beacon Observed",
+      "category": "A Network Trojan was detected",
+      "severity": 1,
+      "metadata": {"mitre_technique_id": ["T1071.001"]}
+    }
+  }
+]
