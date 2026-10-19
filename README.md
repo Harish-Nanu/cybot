@@ -1,26 +1,36 @@
 # Cybot — Cybersecurity Threat Analysis & Response Agent
 
 Cybot ingests security alerts from heterogeneous tools over REST, normalizes them into one
-schema, correlates them by shared indicators, and runs an **agentic RAG workflow** (LangGraph +
-a local LLM via Ollama) that produces a risk assessment and concrete response actions grounded
-in incident-response playbooks, MITRE ATT&CK notes and organization context.
+schema, correlates them by shared indicators, enriches indicators with threat intelligence, and
+runs an **agentic RAG workflow** (LangGraph + a local LLM via Ollama) that produces a risk
+assessment and concrete response actions grounded in incident-response playbooks, MITRE ATT&CK
+notes and organization context.
 
 **Stack:** Python 3.12 · FastAPI · LangGraph · Ollama · ChromaDB · ONNX MiniLM embeddings · SQLAlchemy/SQLite
 
 ## Architecture
 
 ```
- Suricata ─┐                                   ┌──────────────── LangGraph workflow ────────────────┐
- Wazuh ────┤   POST /api/v1/ingest/{source}    │                                                    │
- CrowdStrike┼─► normalizers ─► NormalizedAlert ─┼► correlate ─► plan_queries ─► retrieve ─► grade ──┐ │
- Splunk ───┤   (IOC extraction, severity &      │   (SQL IOC      (LLM)          (Chroma,   (LLM)   │ │
- generic ──┘    category mapping, dedupe)       │    join)                       RRF)       │      │ │
-                         │                      │                    ▲   rewrite_queries ◄─┘ too  │ │
-                         ▼                      │                    └──────(LLM)──────────  few  │ │
-                  SQLite (alerts,               │                                                 ▼ │
-                  indicators, analyses) ◄───────┼──────── recommend_actions ◄── assess_risk ◄─────┘ │
-                                                │              (LLM)              (LLM)            │
-                                                └────────────────────────────────────────────────────┘
+ Suricata · Wazuh · CrowdStrike · Splunk · generic
+                 │  POST /api/v1/ingest/{source}
+                 ▼
+ normalizers ─► NormalizedAlert ─► SQLite (alerts, indicators, analyses, intel cache)
+ (IOC extraction, severity/category mapping, dedupe)
+                 │
+                 ▼  LangGraph workflow
+ ┌──────────────────────────────────────────────────────────────────────────────┐
+ │ correlate            related alerts sharing indicators (SQL join, ± window)  │
+ │   ▼                                                                          │
+ │ select_indicators    intel lookup budget; LLM picks when over budget         │
+ │   ▼                                                                          │
+ │ enrich_indicators    local IOCs, AbuseIPDB, VirusTotal, GreyNoise, URLhaus   │
+ │   ▼                                                                          │
+ │ plan_queries (LLM) ─► retrieve (Chroma + RRF) ─► grade_documents (LLM)       │
+ │                          ▲                          │ too little context     │
+ │                          └── rewrite_queries (LLM) ◄┘ (bounded retries)      │
+ │   ▼ enough context                                                           │
+ │ assess_risk (LLM) ─► recommend_actions (LLM + containment guardrail)         │
+ └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 1. **Ingestion & normalization** — vendor-native payloads (single object or batch) are mapped to
@@ -29,13 +39,17 @@ in incident-response playbooks, MITRE ATT&CK notes and organization context.
    Webhook retries are de-duplicated on `(source, source_alert_id)`.
 2. **Correlation** — alerts sharing any indicator (IP, host, user, hash, domain…) within a time
    window are pulled in, so the agent can see multi-stage attack chains.
-3. **Agentic RAG** — the LLM plans knowledge-base queries, results are fused with reciprocal rank
+3. **Threat-intel enrichment** — indicators from the alert and its correlated alerts are checked
+   against a local IOC list and, when API keys are configured, AbuseIPDB, VirusTotal, GreyNoise
+   and URLhaus. When there are more candidates than the lookup budget, the LLM decides which
+   are worth checking. Results are cached in SQLite.
+4. **Agentic RAG** — the LLM plans knowledge-base queries, results are fused with reciprocal rank
    fusion, the LLM grades relevance and **rewrites queries and retries** when context is
    insufficient (bounded by `max_retrieval_attempts`).
-4. **Risk assessment** — 0-100 score mapped to the org's score bands, rationale with citations,
+5. **Risk assessment** — 0-100 score mapped to the org's score bands, rationale with citations,
    MITRE techniques, confidence and false-positive likelihood. A deterministic heuristic score
-   is supplied as an anchor.
-5. **Recommendations** — prioritized actions per IR phase (investigation, containment,
+   (severity, correlation, intel verdicts) is supplied as an anchor.
+6. **Recommendations** — prioritized actions per IR phase (investigation, containment,
    eradication, recovery, prevention) that name the specific hosts, accounts and IOCs.
 
 Every LLM step has a deterministic fallback (heuristic scoring, similarity-based grading,
@@ -83,6 +97,9 @@ All `/api/v1` routes require `X-API-Key` when `CYBOT_API_KEY` is set. Interactiv
 | GET | `/api/v1/alerts/{id}/analyses` | Analysis history |
 | POST | `/api/v1/analyze/{source}` | Ingest + analyze a single alert in one call |
 | GET | `/api/v1/analyses?min_score=60` | Triage queue of high-risk analyses |
+| GET | `/api/v1/intel/providers` | Configured threat-intel providers |
+| POST | `/api/v1/intel/lookup` | Reputation of one indicator `{"value": "...", "type": null}` (type auto-detected) |
+| POST | `/api/v1/alerts/{id}/enrich?limit=` | Threat intel for a stored alert's indicators |
 | GET | `/api/v1/knowledge/stats` | Vector index stats |
 | POST | `/api/v1/knowledge/search` | Semantic search `{"query": "...", "k": 4}` |
 | POST | `/api/v1/knowledge/reindex` | Rebuild the index from `knowledge/` |
@@ -130,9 +147,42 @@ Environment variables (or `.env`, see `.env.example`), all prefixed with `CYBOT_
 | `RETRIEVAL_K` | `4` | Hits per query |
 | `MAX_RETRIEVAL_ATTEMPTS` | `2` | Retrieve → grade → rewrite loop budget |
 | `CORRELATION_WINDOW_HOURS` | `24` | ± window for indicator correlation |
+| `INTEL_ENABLED` | `true` | Turn threat-intel enrichment on/off |
+| `ABUSEIPDB_API_KEY` / `VIRUSTOTAL_API_KEY` / `GREYNOISE_API_KEY` / `URLHAUS_API_KEY` | – | Enable remote intel providers |
+| `INTEL_LOCAL_PATH` | `intel/local_iocs.csv` | Local IOC list |
+| `INTEL_MAX_LOOKUPS` | `8` | Indicators enriched per analysis |
+| `INTEL_CACHE_TTL_HOURS` | `24` | Cache lifetime for remote results |
+| `INTEL_TIMEOUT_SECONDS` | `10` | Per-request timeout |
 
 The `sentence-transformers` backend needs the extra: `uv sync --extra sentence-transformers`.
 If you change the embedding backend, rebuild the index (`cybot index`).
+
+## Threat intelligence
+
+| Provider | Indicator types | Enabled when |
+|---|---|---|
+| `local` | IP (incl. CIDR), domain (incl. subdomains), URL, email, hashes | `intel/local_iocs.csv` exists |
+| `abuseipdb` | IP | `CYBOT_ABUSEIPDB_API_KEY` set |
+| `virustotal` | IP, domain, URL, MD5/SHA1/SHA256 | `CYBOT_VIRUSTOTAL_API_KEY` set |
+| `greynoise` | IP (Community API) | `CYBOT_GREYNOISE_API_KEY` set |
+| `urlhaus` | URL, host (domain/IP), MD5/SHA256 | `CYBOT_URLHAUS_API_KEY` set |
+
+- Each provider's response is normalized to a verdict (`malicious`, `suspicious`, `harmless`,
+  `unknown`) and a 0-100 score. Per indicator, any malicious verdict wins.
+- Remote providers skip private and reserved IPs. Errors and rate limits (HTTP 429) are reported
+  in the result and never fail an analysis.
+- Successful remote results are cached for `CYBOT_INTEL_CACHE_TTL_HOURS`.
+- `intel/local_iocs.csv` holds internal blocklists and IOCs from past incidents. The shipped
+  entries are fictional (RFC 5737 IP ranges) and match the sample alerts.
+
+```bash
+uv run cybot intel update-cdn-sync.net
+curl -s -X POST localhost:8000/api/v1/intel/lookup -H 'content-type: application/json' \
+     -d '{"value": "8.8.8.8"}'
+```
+
+Free API tiers are rate-limited (e.g. VirusTotal: 4 requests/minute), so keep
+`CYBOT_INTEL_MAX_LOOKUPS` small; the cache absorbs repeat lookups.
 
 ## Knowledge base
 
@@ -159,9 +209,11 @@ src/cybot/
   ingestion/    normalizers per source, IOC extraction, ingestion service
   models/       NormalizedAlert, RiskAssessment, Recommendation, AnalysisResult
   storage/      SQLAlchemy models + repository (alerts, indicators, analyses)
+  intel/        threat-intel providers (local, AbuseIPDB, VirusTotal, GreyNoise, URLhaus) + cached service
   rag/          markdown chunking, embedders, Chroma knowledge base
   agent/        LangGraph workflow, prompts, Ollama client, heuristic fallbacks
   cli.py        cybot serve | index | ingest | analyze | demo
 knowledge/      RAG source documents
+intel/          local IOC list
 samples/        example vendor payloads forming one attack story
 ```

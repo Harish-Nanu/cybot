@@ -30,6 +30,11 @@ services:
       CYBOT_OLLAMA_BASE_URL: http://ollama:11434
       CYBOT_OLLAMA_MODEL: ${CYBOT_OLLAMA_MODEL:-llama3.1:8b}
       CYBOT_API_KEY: ${CYBOT_API_KEY:-}
+      # Optional threat-intel providers; each is enabled when its key is set.
+      CYBOT_ABUSEIPDB_API_KEY: ${CYBOT_ABUSEIPDB_API_KEY:-}
+      CYBOT_VIRUSTOTAL_API_KEY: ${CYBOT_VIRUSTOTAL_API_KEY:-}
+      CYBOT_GREYNOISE_API_KEY: ${CYBOT_GREYNOISE_API_KEY:-}
+      CYBOT_URLHAUS_API_KEY: ${CYBOT_URLHAUS_API_KEY:-}
     volumes:
       - cybot-data:/app/data
     ports:
