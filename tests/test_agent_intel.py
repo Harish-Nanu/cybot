@@ -60,24 +60,49 @@ def test_enrichment_within_budget_skips_llm_selection(make_analyzer, sample_aler
     assert result.intel[0].indicator.type == IT.SHA256
 
 
-def test_llm_selects_indicators_when_over_budget(make_analyzer, sample_alerts):
+def numbered_lines(prompt):
+    return [line for line in prompt.splitlines() if re.match(r"\[\d+\] ", line)]
+
+
+def test_own_hashes_pinned_and_llm_selects_the_rest(make_analyzer, sample_alerts):
     llm = llm_down(IndicatorSelection=IndicatorSelection(selected=[3, 3, 1, 99]))
-    result, trace = make_analyzer(llm, max_lookups=2).analyze(credential_dumping(sample_alerts))
+    result, trace = make_analyzer(llm, max_lookups=3).analyze(credential_dumping(sample_alerts))
 
     (prompt,) = llm.called("IndicatorSelection")
-    assert "at most 2 threat-intelligence" in prompt
-    assert len(result.intel) == 2
-    assert "LLM chose 2/" in trace[1]
-    candidates = [line for line in prompt.splitlines() if re.match(r"\[\d+\] ", line)]
-    assert candidates[2].endswith(result.intel[0].indicator.value)
-    assert candidates[0].endswith(result.intel[1].indicator.value)
+    assert "at most 2 threat-intelligence" in prompt  # one slot went to the pinned hash
+    candidates = numbered_lines(prompt)
+    assert not any("sha256" in line for line in candidates)
+    assert "pinned 1 hash(es), LLM chose 2/" in trace[1]
+    looked_up = [i.indicator.value for i in result.intel]
+    assert result.intel[0].indicator.type == IT.SHA256
+    assert candidates[2].split(": ", 1)[1].startswith(looked_up[1])
+    assert candidates[0].split(": ", 1)[1].startswith(looked_up[2])
+
+
+def test_internal_ips_are_labelled_for_the_model(make_analyzer, sample_alerts):
+    llm = llm_down()
+    make_analyzer(llm, max_lookups=3).analyze(credential_dumping(sample_alerts))
+    (prompt,) = llm.called("IndicatorSelection")
+    internal = [line for line in numbered_lines(prompt) if "10.0.2.57" in line]
+    assert internal and internal[0].endswith(
+        "[internal/private address, likely an organization asset]"
+    )
 
 
 def test_selection_falls_back_to_priority_order(make_analyzer, sample_alerts):
-    result, trace = make_analyzer(llm_down(), max_lookups=1).analyze(
+    result, trace = make_analyzer(llm_down(), max_lookups=3).analyze(
         credential_dumping(sample_alerts)
     )
-    assert "LLM failed, top 1/" in trace[1]
+    assert "LLM failed, top 2/" in trace[1]
+    assert result.intel[0].indicator.type == IT.SHA256
+    assert len(result.intel) == 3
+
+
+def test_budget_of_one_is_spent_on_the_hash_without_llm(make_analyzer, sample_alerts):
+    llm = llm_down()
+    result, trace = make_analyzer(llm, max_lookups=1).analyze(credential_dumping(sample_alerts))
+    assert not llm.called("IndicatorSelection")
+    assert "budget used" in trace[1]
     assert [i.indicator.type for i in result.intel] == [IT.SHA256]
 
 

@@ -22,6 +22,7 @@ from cybot.intel import IndicatorIntel
 from cybot.intel.service import ThreatIntelService
 from cybot.models import (
     Indicator,
+    IndicatorType,
     NormalizedAlert,
     Recommendation,
     ResponsePhase,
@@ -39,6 +40,7 @@ MAX_CHUNKS_PER_DOC = 3
 FALLBACK_MIN_SCORE = 0.25
 RRF_K = 60
 MAX_INTEL_CANDIDATES = 25
+_HASH_TYPES = {IndicatorType.MD5, IndicatorType.SHA1, IndicatorType.SHA256}
 
 
 class AgentState(TypedDict, total=False):
@@ -135,21 +137,30 @@ class AnalysisWorkflow:
         if len(candidates) <= budget:
             note = f"select_indicators: all {len(candidates)} candidate(s) within budget"
             return {"intel_candidates": candidates, "trace": [note]}
+
+        # The alert's own file hashes are the most specific evidence: always look them up
+        # (using at most half the budget) and let the model choose the remaining slots.
+        pinned = [i for i in own if i.type in _HASH_TYPES][: max(1, budget // 2)]
+        rest = [c for c in candidates if c not in pinned]
+        slots = budget - len(pinned)
+        prefix = "select_indicators: " + (f"pinned {len(pinned)} hash(es), " if pinned else "")
+        if slots <= 0:
+            return {"intel_candidates": pinned, "trace": [prefix + "budget used"]}
         try:
             picked = self.llm.generate(
                 prompts.IndicatorSelection,
                 prompts.SYSTEM_ANALYST,
-                prompts.select_indicators_prompt(alert, candidates, budget),
+                prompts.select_indicators_prompt(alert, rest, slots),
             ).selected
-            chosen = [candidates[i - 1] for i in _dedupe(picked) if 1 <= i <= len(candidates)]
+            chosen = [rest[i - 1] for i in _dedupe(picked) if 1 <= i <= len(rest)][:slots]
             if not chosen:
                 raise ValueError("model selected no valid indicators")
-            note = f"select_indicators: LLM chose {min(len(chosen), budget)}/{len(candidates)}"
+            note = f"LLM chose {len(chosen)}/{len(rest)}"
         except Exception as exc:
             logger.warning("Indicator selection failed: %s", exc)
-            chosen = candidates
-            note = f"select_indicators: LLM failed, top {budget}/{len(candidates)} by priority"
-        return {"intel_candidates": chosen[:budget], "trace": [note]}
+            chosen = rest[:slots]
+            note = f"LLM failed, top {slots}/{len(rest)} by priority"
+        return {"intel_candidates": [*pinned, *chosen], "trace": [prefix + note]}
 
     def enrich_indicators(self, state: AgentState) -> AgentState:
         assert self.intel is not None

@@ -7,7 +7,8 @@ from collections.abc import Sequence
 from pydantic import BaseModel, Field
 
 from cybot.intel import IndicatorIntel
-from cybot.models import Indicator, NormalizedAlert, Recommendation
+from cybot.intel.providers import is_public_ip
+from cybot.models import Indicator, IndicatorType, NormalizedAlert, Recommendation
 from cybot.rag import RetrievedChunk
 
 SYSTEM_ANALYST = (
@@ -65,10 +66,17 @@ def _related_block(related: list[NormalizedAlert]) -> str:
     return "\n".join(lines)
 
 
+def _internal_note(indicator: Indicator) -> str:
+    # Small models otherwise recommend "blocking" the organization's own hosts.
+    if indicator.type == IndicatorType.IP and not is_public_ip(indicator.value):
+        return " [internal/private address, likely an organization asset]"
+    return ""
+
+
 def _intel_block(intel: Sequence[IndicatorIntel]) -> str:
     if not intel:
         return "No threat-intelligence lookups were performed."
-    return "\n".join(f"- {i.describe()}" for i in intel)
+    return "\n".join(f"- {i.describe()}{_internal_note(i.indicator)}" for i in intel)
 
 
 def _context_block(chunks: list[RetrievedChunk], max_chars: int = 1200) -> str:
@@ -82,7 +90,9 @@ def _context_block(chunks: list[RetrievedChunk], max_chars: int = 1200) -> str:
 def select_indicators_prompt(
     alert: NormalizedAlert, candidates: Sequence[Indicator], budget: int
 ) -> str:
-    numbered = "\n".join(f"[{n}] {i.type}: {i.value}" for n, i in enumerate(candidates, 1))
+    numbered = "\n".join(
+        f"[{n}] {i.type}: {i.value}{_internal_note(i)}" for n, i in enumerate(candidates, 1)
+    )
     return (
         f"You can afford at most {budget} threat-intelligence reputation lookups. Choose the "
         "indicators whose reputation would most change the risk assessment: likely attacker "
