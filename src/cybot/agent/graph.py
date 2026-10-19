@@ -16,14 +16,21 @@ from langgraph.graph import END, START, StateGraph
 
 from cybot.agent import heuristics, prompts
 from cybot.agent.llm import StructuredLLM
-from cybot.models import NormalizedAlert, Recommendation, RiskAssessment
+from cybot.models import (
+    NormalizedAlert,
+    Recommendation,
+    ResponsePhase,
+    RiskAssessment,
+    Severity,
+)
 from cybot.rag import KnowledgeBase, RetrievedChunk
 from cybot.storage import AlertRepository
 
 logger = logging.getLogger(__name__)
 
 MIN_RELEVANT_CHUNKS = 2
-MAX_CONTEXT_CHUNKS = 6
+MAX_CONTEXT_CHUNKS = 8
+MAX_CHUNKS_PER_DOC = 3
 FALLBACK_MIN_SCORE = 0.25
 RRF_K = 60
 
@@ -146,7 +153,7 @@ class AnalysisWorkflow:
             note = f"grade_documents: LLM failed, kept {len(relevant)} by similarity"
         # Keep relevant material from earlier attempts when retrying with new queries.
         merged = {c.id: c for c in [*previous, *relevant]}
-        context = list(merged.values())[:MAX_CONTEXT_CHUNKS]
+        context = _diversify(list(merged.values()))
         return {"context": context, "trace": [note]}
 
     def route_after_grading(self, state: AgentState) -> Literal["rewrite", "assess"]:
@@ -210,11 +217,32 @@ class AnalysisWorkflow:
             if not recs:
                 raise ValueError("empty recommendation list")
             note = f"recommend_actions: {len(recs)} action(s)"
+            # Guardrail: smaller models sometimes skip containment for serious incidents.
+            serious = assessment.risk_level in (Severity.HIGH, Severity.CRITICAL)
+            if serious and not any(r.phase == ResponsePhase.CONTAINMENT for r in recs):
+                added = [
+                    r
+                    for r in heuristics.fallback_recommendations(alert, assessment.risk_level)
+                    if r.phase == ResponsePhase.CONTAINMENT
+                ]
+                recs = [*added, *recs]
+                note += f", +{len(added)} containment step(s) added by guardrail"
         except Exception as exc:
             logger.warning("Recommendation generation failed: %s", exc)
             recs = heuristics.fallback_recommendations(alert, assessment.risk_level)
             note = f"recommend_actions: LLM failed, {len(recs)} playbook default(s)"
         return {"recommendations": recs, "trace": [note]}
+
+
+def _diversify(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Keep ranking order but cap chunks per document so context spans several sources."""
+    per_doc: dict[str, int] = {}
+    out = []
+    for chunk in chunks:
+        if per_doc.get(chunk.doc_id, 0) < MAX_CHUNKS_PER_DOC:
+            per_doc[chunk.doc_id] = per_doc.get(chunk.doc_id, 0) + 1
+            out.append(chunk)
+    return out[:MAX_CONTEXT_CHUNKS]
 
 
 def _default_queries(alert: NormalizedAlert) -> list[str]:

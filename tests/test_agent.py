@@ -148,3 +148,45 @@ def test_baseline_increases_with_correlation(sample_alerts):
     others = [a for a in sample_alerts if a is not alert]
     assert baseline_score(alert, others) > baseline_score(alert, [])
     assert baseline_score(alert, others) <= 100
+
+
+def test_guardrail_adds_containment_for_serious_risk(make_analyzer, sample_alerts):
+    prevention_only = RecommendationList(
+        recommendations=[
+            Recommendation(
+                action="Enable Credential Guard",
+                phase=ResponsePhase.PREVENTION,
+                priority=Priority.MEDIUM,
+            )
+        ]
+    )
+    llm = FakeLLM(
+        {
+            "SearchQueries": SearchQueries(queries=["mimikatz"]),
+            "RelevanceGrades": RelevanceGrades(relevant=[1, 2]),
+            "RiskAssessment": assessment(score=90),
+            "RecommendationList": prevention_only,
+        }
+    )
+    result, trace = make_analyzer(llm).analyze(credential_dumping(sample_alerts))
+    phases = [r.phase for r in result.recommendations]
+    assert phases[0] == ResponsePhase.CONTAINMENT
+    assert result.recommendations[-1].action == "Enable Credential Guard"
+    assert "guardrail" in trace[-1]
+
+
+def test_context_is_capped_per_document(make_analyzer, sample_alerts):
+    llm = FakeLLM(
+        {
+            "SearchQueries": SearchQueries(queries=["credential dumping", "lsass mimikatz"]),
+            "RelevanceGrades": RelevanceGrades(relevant=list(range(1, 13))),
+            "RiskAssessment": assessment(),
+            "RecommendationList": RECS,
+        }
+    )
+    result, _ = make_analyzer(llm).analyze(credential_dumping(sample_alerts))
+    per_doc = {}
+    for ref in result.references:
+        per_doc[ref.doc_id] = per_doc.get(ref.doc_id, 0) + 1
+    assert max(per_doc.values()) <= 3
+    assert len(per_doc) >= 3
