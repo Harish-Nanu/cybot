@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 MIN_RELEVANT_CHUNKS = 2
 MAX_CONTEXT_CHUNKS = 6
 FALLBACK_MIN_SCORE = 0.25
+RRF_K = 60
 
 
 class AgentState(TypedDict, total=False):
@@ -106,12 +107,16 @@ class AnalysisWorkflow:
         return {"queries": queries, "trace": [note]}
 
     def retrieve(self, state: AgentState) -> AgentState:
+        # Reciprocal rank fusion: a broad query with uniformly high similarity scores
+        # shouldn't crowd out the top hits of more specific queries.
         best: dict[str, RetrievedChunk] = {}
+        fused: dict[str, float] = {}
         for query in state.get("queries", []):
-            for hit in self.knowledge.search(query, k=self.retrieval_k):
+            for rank, hit in enumerate(self.knowledge.search(query, k=self.retrieval_k)):
+                fused[hit.id] = fused.get(hit.id, 0.0) + 1.0 / (RRF_K + rank)
                 if hit.id not in best or hit.score > best[hit.id].score:
                     best[hit.id] = hit
-        retrieved = sorted(best.values(), key=lambda c: c.score, reverse=True)
+        retrieved = sorted(best.values(), key=lambda c: fused[c.id], reverse=True)
         attempts = state.get("retrieval_attempts", 0) + 1
         return {
             "retrieved": retrieved,
@@ -141,7 +146,7 @@ class AnalysisWorkflow:
             note = f"grade_documents: LLM failed, kept {len(relevant)} by similarity"
         # Keep relevant material from earlier attempts when retrying with new queries.
         merged = {c.id: c for c in [*previous, *relevant]}
-        context = sorted(merged.values(), key=lambda c: c.score, reverse=True)[:MAX_CONTEXT_CHUNKS]
+        context = list(merged.values())[:MAX_CONTEXT_CHUNKS]
         return {"context": context, "trace": [note]}
 
     def route_after_grading(self, state: AgentState) -> Literal["rewrite", "assess"]:
@@ -213,7 +218,10 @@ class AnalysisWorkflow:
 
 
 def _default_queries(alert: NormalizedAlert) -> list[str]:
-    queries = [alert.title, f"{alert.category.value.replace('_', ' ')} response playbook"]
+    category = alert.category.value.replace("_", " ")
+    queries = [f"{alert.title} {category} triage and response"]
+    if alert.description:
+        queries.append(alert.description[:300])
     queries += [f"MITRE ATT&CK {t}" for t in alert.mitre_techniques[:2]]
     if alert.hostname:
         queries.append(f"asset criticality {alert.hostname}")
