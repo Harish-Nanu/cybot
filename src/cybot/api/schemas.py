@@ -2,9 +2,9 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from cybot.models import AlertCategory, NormalizedAlert, Severity
+from cybot.models import AlertCategory, AnalysisResult, NormalizedAlert, Severity
 
 
 class AlertSummary(BaseModel):
@@ -48,3 +48,30 @@ class IngestResponse(BaseModel):
     duplicates: int
     alerts: list[AlertSummary]
     errors: list[IngestErrorOut]
+
+
+class AnalysisResponse(BaseModel):
+    alert: AlertSummary
+    analysis: AnalysisResult
+    trace: list[str]
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    k: int = Field(default=4, ge=1, le=20)
+
+
+class KnowledgeHit(BaseModel):
+    id: str
+    doc_id: str
+    title: str
+    section: str
+    score: float
+    text: str
+
+
+class KnowledgeStats(BaseModel):
+    collection: str
+    embedder: str
+    chunks: int
+    documents: int

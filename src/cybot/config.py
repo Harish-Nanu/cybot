@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     embedding_model: str = "all-MiniLM-L6-v2"
     retrieval_k: int = 4
     max_retrieval_attempts: int = 2
+    auto_index_knowledge: bool = True  # build the index on startup if it is empty
 
     # Correlation
     correlation_window_hours: int = 24

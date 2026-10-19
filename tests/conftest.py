@@ -72,3 +72,32 @@ class FakeLLM:
 
     def called(self, name):
         return [p for n, p in self.calls if n == name]
+
+
+@pytest.fixture
+def make_client(tmp_path):
+    """Build a TestClient over an isolated app (temp DB/index, hashing embedder, fake LLM)."""
+    from fastapi.testclient import TestClient
+
+    from cybot.config import Settings
+    from cybot.main import build_services, create_app
+    from cybot.rag import HashingEmbedder
+
+    def _make(llm=None, **overrides):
+        settings = Settings(
+            **{
+                "database_url": f"sqlite:///{tmp_path / 'api.db'}",
+                "chroma_path": tmp_path / "chroma",
+                "knowledge_dir": KNOWLEDGE_DIR,
+                "api_key": None,
+                **overrides,
+            }
+        )
+        services = build_services(
+            settings,
+            llm=llm or FakeLLM(default_error=ConnectionError("no llm")),
+            embedder=HashingEmbedder(),
+        )
+        return TestClient(create_app(settings, services))
+
+    return _make

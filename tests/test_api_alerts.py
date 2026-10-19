@@ -1,21 +1,13 @@
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
-from cybot.config import Settings
-from cybot.main import create_app
 from tests.conftest import SAMPLES
 
 
 @pytest.fixture
-def settings(tmp_path):
-    return Settings(database_url=f"sqlite:///{tmp_path / 'api.db'}", api_key=None)
-
-
-@pytest.fixture
-def client(settings):
-    return TestClient(create_app(settings))
+def client(make_client):
+    return make_client()
 
 
 def sample(source):
@@ -82,9 +74,8 @@ def test_missing_alert_404(client):
     assert client.get("/api/v1/alerts/nope").status_code == 404
 
 
-def test_api_key_enforced(tmp_path):
-    settings = Settings(database_url=f"sqlite:///{tmp_path / 'k.db'}", api_key="s3cret")
-    client = TestClient(create_app(settings))
+def test_api_key_enforced(make_client):
+    client = make_client(api_key="s3cret")
     assert client.get("/api/v1/sources").status_code == 401
     assert client.get("/api/v1/sources", headers={"X-API-Key": "wrong"}).status_code == 401
     assert client.get("/api/v1/sources", headers={"X-API-Key": "s3cret"}).status_code == 200
