@@ -35,6 +35,10 @@ services:
       CYBOT_VIRUSTOTAL_API_KEY: ${CYBOT_VIRUSTOTAL_API_KEY:-}
       CYBOT_GREYNOISE_API_KEY: ${CYBOT_GREYNOISE_API_KEY:-}
       CYBOT_URLHAUS_API_KEY: ${CYBOT_URLHAUS_API_KEY:-}
+      # Response actions are simulated unless set to "live" with a webhook URL.
+      CYBOT_RESPONSE_MODE: ${CYBOT_RESPONSE_MODE:-dry_run}
+      CYBOT_RESPONSE_WEBHOOK_URL: ${CYBOT_RESPONSE_WEBHOOK_URL:-}
+      CYBOT_RESPONSE_WEBHOOK_SECRET: ${CYBOT_RESPONSE_WEBHOOK_SECRET:-}
     volumes:
       - cybot-data:/app/data
     ports:

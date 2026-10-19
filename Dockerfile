@@ -12,12 +12,14 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 COPY knowledge ./knowledge
 COPY intel ./intel
+COPY policy ./policy
 COPY samples ./samples
 RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH" \
     CYBOT_DATABASE_URL="sqlite:////app/data/cybot.db" \
-    CYBOT_CHROMA_PATH="/app/data/chroma"
+    CYBOT_CHROMA_PATH="/app/data/chroma" \
+    CYBOT_CHECKPOINT_PATH="/app/data/checkpoints.db"
 
 # Bake the ONNX embedding model into the image so startup works offline.
 RUN python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2; ONNXMiniLM_L6_V2()(['warmup'])"
