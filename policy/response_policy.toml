@@ -1,0 +1,29 @@
+# Approval rules for automated response actions.
+# Mirrors knowledge/organization/escalation-policy.md: SOC may isolate workstations and block
+# external indicators without approval; production servers, identity systems and privileged
+# accounts need a human decision.
+
+[global]
+# Mode for action types not listed under [actions]: auto | require_approval | deny
+default_mode = "require_approval"
+# Below this risk score every disruptive action requires approval.
+min_auto_risk_score = 60
+
+[actions]
+block_ip = "auto"
+block_domain = "auto"
+block_url = "auto"
+block_hash = "auto"
+isolate_host = "auto"
+disable_account = "require_approval"
+reset_credentials = "require_approval"
+open_ticket = "auto"
+
+[protected]
+# Isolating these hosts needs approval (production servers, identity, remote access).
+hosts = ["web-srv-01", "vpn-gw-01", "dc-01", "dc-02"]
+# Disabling or resetting these accounts needs approval (coordinated with IAM).
+accounts = ["administrator", "krbtgt", "deploy", "svc-backup"]
+# Blocking internal addresses at the perimeter is never done; contain hosts via EDR instead.
+never_block_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"]
+never_block_domains = ["corp.example"]

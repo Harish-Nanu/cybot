@@ -34,6 +34,7 @@ def sample_alerts() -> list[NormalizedAlert]:
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parents[1] / "knowledge"
 INTEL_FILE = Path(__file__).resolve().parents[1] / "intel" / "local_iocs.csv"
+POLICY_FILE = Path(__file__).resolve().parents[1] / "policy" / "response_policy.toml"
 
 
 @pytest.fixture

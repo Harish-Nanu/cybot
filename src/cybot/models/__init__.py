@@ -15,8 +15,20 @@ from cybot.models.analysis import (
     RiskAssessment,
 )
 from cybot.models.intel import IndicatorIntel, IntelResult, Verdict
+from cybot.models.response import (
+    ActionEvent,
+    ActionStatus,
+    ActionType,
+    ApprovalMode,
+    ResponseAction,
+)
 
 __all__ = [
+    "ActionEvent",
+    "ActionStatus",
+    "ActionType",
+    "ApprovalMode",
+    "ResponseAction",
     "AlertCategory",
     "AnalysisResult",
     "Indicator",
