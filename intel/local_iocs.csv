@@ -1,0 +1,11 @@
+# Local threat intelligence: internal blocklists and indicators from past incidents.
+# These example entries are fictional (RFC 5737 documentation IP ranges) and match the
+# sample alerts in samples/. Replace them with your organization's own intelligence.
+type,value,verdict,score,description,tags
+ip,203.0.113.45,malicious,85,SSH brute-force source seen in prior incident INC-2041,bruteforce|ssh|botnet
+cidr,203.0.113.0/24,suspicious,40,Hosting range repeatedly abused for scanning,scanner|hosting
+ip,198.51.100.77,malicious,95,Cobalt Strike team server (internal hunt HUNT-118),c2|cobaltstrike
+domain,update-cdn-sync.net,malicious,95,Cobalt Strike C2 domain impersonating a CDN,c2|cobaltstrike|typosquat
+domain,invoices-secure-pay.com,malicious,90,Invoice-themed phishing kit domain,phishing|credential-harvest
+sha256,92804faaab2175dc501d73e814663058c78c0a042675a8937266357bcfb96c50,malicious,100,Mimikatz credential-dumping tool,hacktool|mimikatz
+domain,corp.example,harmless,0,Organization's own mail domain,internal
