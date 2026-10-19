@@ -1,0 +1,40 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    # Uncomment to use an NVIDIA GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on: [ollama]
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["ollama", "pull", "${CYBOT_OLLAMA_MODEL:-llama3.1:8b}"]
+    restart: "no"
+
+  cybot:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_started
+      ollama-pull:
+        condition: service_completed_successfully
+    environment:
+      CYBOT_OLLAMA_BASE_URL: http://ollama:11434
+      CYBOT_OLLAMA_MODEL: ${CYBOT_OLLAMA_MODEL:-llama3.1:8b}
+      CYBOT_API_KEY: ${CYBOT_API_KEY:-}
+    volumes:
+      - cybot-data:/app/data
+    ports:
+      - "8000:8000"
+
+volumes:
+  ollama-models:
+  cybot-data:

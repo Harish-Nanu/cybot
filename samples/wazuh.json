@@ -1,0 +1,33 @@
+[
+  {
+    "timestamp": "2026-10-18T09:20:11.000+0000",
+    "id": "1729243211.104857",
+    "rule": {
+      "level": 10,
+      "description": "sshd: brute force trying to get access to the system. Authentication failed.",
+      "id": "5763",
+      "firedtimes": 18,
+      "mitre": {"id": ["T1110"], "tactic": ["Credential Access"], "technique": ["Brute Force"]},
+      "groups": ["syslog", "sshd", "authentication_failures"]
+    },
+    "agent": {"id": "003", "name": "web-srv-01", "ip": "10.0.1.20"},
+    "manager": {"name": "wazuh-manager"},
+    "full_log": "Oct 18 09:20:11 web-srv-01 sshd[2231]: Failed password for invalid user admin from 203.0.113.45 port 51290 ssh2",
+    "data": {"srcip": "203.0.113.45", "srcport": "51290", "dstuser": "admin"},
+    "location": "/var/log/auth.log"
+  },
+  {
+    "timestamp": "2026-10-18T09:31:57.000+0000",
+    "id": "1729243917.108812",
+    "rule": {
+      "level": 3,
+      "description": "sshd: authentication success.",
+      "id": "5715",
+      "mitre": {"id": ["T1078"], "tactic": ["Initial Access"], "technique": ["Valid Accounts"]},
+      "groups": ["syslog", "sshd", "authentication_success"]
+    },
+    "agent": {"id": "003", "name": "web-srv-01", "ip": "10.0.1.20"},
+    "full_log": "Oct 18 09:31:57 web-srv-01 sshd[2410]: Accepted password for deploy from 203.0.113.45 port 51877 ssh2",
+    "data": {"srcip": "203.0.113.45", "srcport": "51877", "dstuser": "deploy"}
+  }
+]
