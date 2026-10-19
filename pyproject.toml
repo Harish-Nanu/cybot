@@ -20,6 +20,9 @@ dependencies = [
 [project.optional-dependencies]
 sentence-transformers = ["sentence-transformers>=3.0"]
 
+[project.scripts]
+cybot = "cybot.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
