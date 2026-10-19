@@ -1,4 +1,4 @@
-"""Command-line interface: `cybot serve | index | ingest | analyze | demo`."""
+"""Command-line interface: `cybot serve | index | ingest | analyze | intel | demo`."""
 
 from __future__ import annotations
 
@@ -66,6 +66,30 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         _report(analysis, trace)
 
 
+def cmd_intel(args: argparse.Namespace) -> None:
+    from cybot.ingestion.extract import detect_indicator_type
+    from cybot.models import Indicator, IndicatorType
+
+    services = _services()
+    if services.intel is None:
+        sys.exit("Threat intelligence is disabled or no providers are configured")
+    itype = IndicatorType(args.type) if args.type else detect_indicator_type(args.value)
+    if itype is None:
+        sys.exit("Could not detect the indicator type; pass --type")
+    result = services.intel.lookup(Indicator(type=itype, value=args.value))
+    if args.json:
+        _print_json(result.model_dump(mode="json"))
+        return
+    print(f"{itype}:{args.value} -> {result.verdict.upper()} (score {result.score})")
+    if not result.results:
+        print(f"  no configured provider supports this indicator ({services.intel.provider_names})")
+    for r in result.results:
+        status = f"ERROR {r.error}" if r.error else f"{r.verdict} ({r.score}) {r.summary}"
+        print(f"  {r.provider:<11} {status}{'  [cached]' if r.cached else ''}")
+        if r.reference:
+            print(f"  {'':<11} {r.reference}")
+
+
 def cmd_demo(args: argparse.Namespace) -> None:
     """Load all sample alerts, then analyze the most severe ones."""
     services = _services()
@@ -91,6 +115,11 @@ def _report(analysis, trace) -> None:
     print("  Recommended actions:")
     for rec in analysis.recommendations:
         print(f"    - [{rec.priority}/{rec.phase}] {rec.action}")
+    flagged = [i for i in analysis.intel if i.verdict in ("malicious", "suspicious")]
+    if analysis.intel:
+        print(f"  Threat intel: {len(analysis.intel)} indicator(s) checked, {len(flagged)} flagged")
+        for i in flagged:
+            print(f"    - {i.indicator.type}:{i.indicator.value} {i.verdict} ({i.score})")
     if analysis.references:
         print("  References: " + "; ".join(r.title for r in analysis.references))
     print("  Trace: " + " | ".join(trace))
@@ -121,6 +150,12 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("alert_id")
     analyze.add_argument("--json", action="store_true")
     analyze.set_defaults(func=cmd_analyze)
+
+    intel = sub.add_parser("intel", help="Threat-intel reputation lookup for one indicator")
+    intel.add_argument("value", help="IP, domain, URL, email or file hash")
+    intel.add_argument("--type", help="Indicator type (auto-detected when omitted)")
+    intel.add_argument("--json", action="store_true")
+    intel.set_defaults(func=cmd_intel)
 
     demo = sub.add_parser("demo", help="Ingest sample alerts and analyze the most severe")
     demo.add_argument("--top", type=int, default=2)

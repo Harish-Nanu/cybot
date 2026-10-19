@@ -9,6 +9,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from cybot.models.alert import Severity
+from cybot.models.intel import IndicatorIntel
 
 
 class ResponsePhase(StrEnum):
@@ -64,6 +65,7 @@ class AnalysisResult(BaseModel):
     recommendations: list[Recommendation] = Field(default_factory=list)
     related_alert_ids: list[str] = Field(default_factory=list)
     references: list[KnowledgeReference] = Field(default_factory=list)
+    intel: list[IndicatorIntel] = Field(default_factory=list)
     model: str | None = None
     retrieval_attempts: int = 0
     duration_ms: int | None = None

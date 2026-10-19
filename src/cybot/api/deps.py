@@ -12,6 +12,7 @@ from fastapi.security import APIKeyHeader
 from cybot.agent import ThreatAnalyzer
 from cybot.config import Settings
 from cybot.ingestion.service import IngestionService
+from cybot.intel.service import ThreatIntelService
 from cybot.rag import KnowledgeBase
 from cybot.storage import AlertRepository
 
@@ -23,6 +24,7 @@ class Services:
     ingestion: IngestionService
     knowledge: KnowledgeBase
     analyzer: ThreatAnalyzer
+    intel: ThreatIntelService | None = None
 
 
 def get_services(request: Request) -> Services:

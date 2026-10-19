@@ -7,6 +7,7 @@ import time
 from cybot.agent.graph import AnalysisWorkflow
 from cybot.agent.llm import StructuredLLM
 from cybot.config import Settings
+from cybot.intel.service import ThreatIntelService
 from cybot.models import AnalysisResult, KnowledgeReference, NormalizedAlert
 from cybot.rag import KnowledgeBase
 from cybot.storage import AlertRepository
@@ -19,6 +20,7 @@ class ThreatAnalyzer:
         knowledge: KnowledgeBase,
         llm: StructuredLLM,
         settings: Settings,
+        intel: ThreatIntelService | None = None,
     ) -> None:
         self.repo = repo
         self.llm = llm
@@ -29,6 +31,8 @@ class ThreatAnalyzer:
             retrieval_k=settings.retrieval_k,
             max_retrieval_attempts=settings.max_retrieval_attempts,
             correlation_window_hours=settings.correlation_window_hours,
+            intel=intel,
+            max_intel_lookups=settings.intel_max_lookups,
         )
 
     def analyze(self, alert: NormalizedAlert) -> tuple[AnalysisResult, list[str]]:
@@ -46,6 +50,7 @@ class ThreatAnalyzer:
                 )
                 for c in state.get("context", [])
             ],
+            intel=state.get("intel", []),
             model=self.llm.model_name,
             retrieval_attempts=state.get("retrieval_attempts", 0),
             duration_ms=int((time.perf_counter() - started) * 1000),

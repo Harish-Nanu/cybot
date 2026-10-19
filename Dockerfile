@@ -11,6 +11,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src ./src
 COPY knowledge ./knowledge
+COPY intel ./intel
 COPY samples ./samples
 RUN uv sync --frozen --no-dev
 

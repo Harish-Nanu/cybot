@@ -65,6 +65,23 @@ def extract_indicators(texts: Iterable[str | None]) -> list[Indicator]:
     return dedupe_indicators(found)
 
 
+def detect_indicator_type(value: str) -> IndicatorType | None:
+    """Best-effort type detection for a single user-supplied indicator."""
+    value = value.strip()
+    if is_valid_ip(value):
+        return IndicatorType.IP
+    if _URL_RE.fullmatch(value):
+        return IndicatorType.URL
+    if _EMAIL_RE.fullmatch(value):
+        return IndicatorType.EMAIL
+    for itype, regex in _HASH_RES.items():
+        if regex.fullmatch(value):
+            return itype
+    if _DOMAIN_RE.fullmatch(value):
+        return IndicatorType.DOMAIN
+    return None
+
+
 def dedupe_indicators(indicators: Iterable[Indicator]) -> list[Indicator]:
     seen: set[tuple[str, str]] = set()
     out: list[Indicator] = []

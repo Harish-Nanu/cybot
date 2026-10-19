@@ -33,6 +33,7 @@ def sample_alerts() -> list[NormalizedAlert]:
 
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parents[1] / "knowledge"
+INTEL_FILE = Path(__file__).resolve().parents[1] / "intel" / "local_iocs.csv"
 
 
 @pytest.fixture
@@ -89,6 +90,7 @@ def make_client(tmp_path):
                 "database_url": f"sqlite:///{tmp_path / 'api.db'}",
                 "chroma_path": tmp_path / "chroma",
                 "knowledge_dir": KNOWLEDGE_DIR,
+                "intel_local_path": INTEL_FILE,
                 "api_key": None,
                 **overrides,
             }

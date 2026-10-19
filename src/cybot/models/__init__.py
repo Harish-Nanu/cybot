@@ -14,12 +14,15 @@ from cybot.models.analysis import (
     ResponsePhase,
     RiskAssessment,
 )
+from cybot.models.intel import IndicatorIntel, IntelResult, Verdict
 
 __all__ = [
     "AlertCategory",
     "AnalysisResult",
     "Indicator",
+    "IndicatorIntel",
     "IndicatorType",
+    "IntelResult",
     "KnowledgeReference",
     "Likelihood",
     "NormalizedAlert",
@@ -28,4 +31,5 @@ __all__ = [
     "ResponsePhase",
     "RiskAssessment",
     "Severity",
+    "Verdict",
 ]
