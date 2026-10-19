@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from cybot.intel.models import IntelResult, Verdict
 from cybot.intel.providers.base import IntelProvider
 from cybot.models.alert import Indicator, IndicatorType
+from cybot.models.intel import IntelResult, Verdict
 
 
 @dataclass

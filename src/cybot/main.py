@@ -13,6 +13,8 @@ from cybot.api import alerts, analysis, health, knowledge
 from cybot.api.deps import Services, require_api_key
 from cybot.config import Settings, get_settings
 from cybot.ingestion.service import IngestionService
+from cybot.intel.providers import build_providers
+from cybot.intel.service import ThreatIntelService
 from cybot.rag import Embedder, KnowledgeBase, build_embedder
 from cybot.storage import AlertRepository, Database
 
@@ -38,13 +40,19 @@ def build_services(
         indexed = kb.index_directory(settings.knowledge_dir)
         logger.info("Indexed %d knowledge chunks from %s", indexed, settings.knowledge_dir)
 
-    analyzer = ThreatAnalyzer(repo, kb, llm or OllamaLLM(settings), settings)
+    intel = None
+    if settings.intel_enabled and (providers := build_providers(settings)):
+        intel = ThreatIntelService(providers, repo, cache_ttl_hours=settings.intel_cache_ttl_hours)
+        logger.info("Threat intel providers: %s", ", ".join(intel.provider_names))
+
+    analyzer = ThreatAnalyzer(repo, kb, llm or OllamaLLM(settings), settings, intel)
     return Services(
         settings=settings,
         repo=repo,
         ingestion=IngestionService(repo),
         knowledge=kb,
         analyzer=analyzer,
+        intel=intel,
     )
 
 

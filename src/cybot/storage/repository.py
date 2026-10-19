@@ -10,8 +10,8 @@ from pathlib import Path
 from sqlalchemy import create_engine, event, func, select, tuple_
 from sqlalchemy.orm import Session, sessionmaker
 
-from cybot.intel.models import IntelResult
 from cybot.models import AlertCategory, AnalysisResult, NormalizedAlert, Severity
+from cybot.models.intel import IntelResult
 from cybot.storage.orm import (
     AlertRecord,
     AnalysisRecord,

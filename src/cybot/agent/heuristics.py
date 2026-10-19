@@ -6,6 +6,9 @@ is unavailable or returns invalid output.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from cybot.intel import IndicatorIntel, Verdict
 from cybot.models import (
     AlertCategory,
     Likelihood,
@@ -46,7 +49,15 @@ def level_from_score(score: int) -> Severity:
     return Severity.INFORMATIONAL
 
 
-def baseline_score(alert: NormalizedAlert, related: list[NormalizedAlert]) -> int:
+def _flagged(intel: Sequence[IndicatorIntel], verdict: Verdict) -> list[IndicatorIntel]:
+    return [i for i in intel if i.verdict == verdict]
+
+
+def baseline_score(
+    alert: NormalizedAlert,
+    related: list[NormalizedAlert],
+    intel: Sequence[IndicatorIntel] = (),
+) -> int:
     score = _SEVERITY_BASE[alert.severity]
     if alert.category in _IMPACTFUL:
         score += 5
@@ -55,17 +66,29 @@ def baseline_score(alert: NormalizedAlert, related: list[NormalizedAlert]) -> in
     score += min(10, 5 * len(other_categories))  # multi-stage activity on shared entities
     if any(a.severity.rank > alert.severity.rank for a in related):
         score += 5
+    if _flagged(intel, Verdict.MALICIOUS):
+        score += 15
+    elif _flagged(intel, Verdict.SUSPICIOUS):
+        score += 7
     return max(0, min(100, score))
 
 
 def fallback_assessment(
-    alert: NormalizedAlert, related: list[NormalizedAlert], reason: str
+    alert: NormalizedAlert,
+    related: list[NormalizedAlert],
+    reason: str,
+    intel: Sequence[IndicatorIntel] = (),
 ) -> RiskAssessment:
-    score = baseline_score(alert, related)
+    score = baseline_score(alert, related, intel)
     rationale = (
         f"Heuristic assessment ({reason}). Base severity {alert.severity}, category "
         f"{alert.category}, {len(related)} correlated alert(s) sharing indicators."
     )
+    if malicious := _flagged(intel, Verdict.MALICIOUS):
+        rationale += " Threat intel marks as malicious: " + ", ".join(
+            i.indicator.value for i in malicious
+        )
+        rationale += "."
     return RiskAssessment(
         risk_score=score,
         risk_level=level_from_score(score),
@@ -140,11 +163,25 @@ _DEFAULT_ACTIONS = [
 ]
 
 
-def fallback_recommendations(alert: NormalizedAlert, risk: Severity) -> list[Recommendation]:
+def fallback_recommendations(
+    alert: NormalizedAlert, risk: Severity, intel: Sequence[IndicatorIntel] = ()
+) -> list[Recommendation]:
     priority = {
         Severity.CRITICAL: Priority.IMMEDIATE,
         Severity.HIGH: Priority.HIGH,
         Severity.MEDIUM: Priority.MEDIUM,
     }.get(risk, Priority.LOW)
     actions = _CATEGORY_ACTIONS.get(alert.category, _DEFAULT_ACTIONS)
-    return [_rec(action, phase, priority, "Standard playbook step") for action, phase in actions]
+    recs = [_rec(action, phase, priority, "Standard playbook step") for action, phase in actions]
+    if malicious := _flagged(intel, Verdict.MALICIOUS):
+        values = ", ".join(i.indicator.value for i in malicious)
+        recs.insert(
+            0,
+            _rec(
+                f"Block known-malicious indicators at perimeter/EDR: {values}",
+                ResponsePhase.CONTAINMENT,
+                priority,
+                "Flagged malicious by threat intelligence",
+            ),
+        )
+    return recs

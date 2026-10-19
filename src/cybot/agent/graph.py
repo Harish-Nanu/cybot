@@ -1,9 +1,11 @@
 """LangGraph agentic-RAG workflow for alert risk assessment.
 
-correlate -> plan_queries -> retrieve -> grade_documents --(enough context)--> assess_risk
-                                ^                |                                  |
-                                +-- rewrite <----+ (too little, retry budget left)  v
-                                                                           recommend_actions
+correlate -> [select_indicators -> enrich_indicators] -> plan_queries -> retrieve
+    -> grade_documents --(enough context)--> assess_risk -> recommend_actions
+            |                    ^
+            +--> rewrite_queries-+ (too little context, retry budget left)
+
+The threat-intel steps run only when intel providers are configured.
 """
 
 from __future__ import annotations
@@ -16,7 +18,10 @@ from langgraph.graph import END, START, StateGraph
 
 from cybot.agent import heuristics, prompts
 from cybot.agent.llm import StructuredLLM
+from cybot.intel import IndicatorIntel
+from cybot.intel.service import ThreatIntelService
 from cybot.models import (
+    Indicator,
     NormalizedAlert,
     Recommendation,
     ResponsePhase,
@@ -33,11 +38,14 @@ MAX_CONTEXT_CHUNKS = 8
 MAX_CHUNKS_PER_DOC = 3
 FALLBACK_MIN_SCORE = 0.25
 RRF_K = 60
+MAX_INTEL_CANDIDATES = 25
 
 
 class AgentState(TypedDict, total=False):
     alert: NormalizedAlert
     related_alerts: list[NormalizedAlert]
+    intel_candidates: list[Indicator]
+    intel: list[IndicatorIntel]
     queries: list[str]
     retrieved: list[RetrievedChunk]
     context: list[RetrievedChunk]
@@ -57,8 +65,12 @@ class AnalysisWorkflow:
         retrieval_k: int = 4,
         max_retrieval_attempts: int = 2,
         correlation_window_hours: int = 24,
+        intel: ThreatIntelService | None = None,
+        max_intel_lookups: int = 8,
     ) -> None:
         self.repo = repo
+        self.intel = intel if intel is not None and intel.providers else None
+        self.max_intel_lookups = max_intel_lookups
         self.knowledge = knowledge
         self.llm = llm
         self.retrieval_k = retrieval_k
@@ -69,6 +81,8 @@ class AnalysisWorkflow:
     def _build(self):
         g = StateGraph(AgentState)
         g.add_node("correlate", self.correlate)
+        g.add_node("select_indicators", self.select_indicators)
+        g.add_node("enrich_indicators", self.enrich_indicators)
         g.add_node("plan_queries", self.plan_queries)
         g.add_node("retrieve", self.retrieve)
         g.add_node("grade_documents", self.grade_documents)
@@ -77,7 +91,12 @@ class AnalysisWorkflow:
         g.add_node("recommend_actions", self.recommend_actions)
 
         g.add_edge(START, "correlate")
-        g.add_edge("correlate", "plan_queries")
+        if self.intel is not None:
+            g.add_edge("correlate", "select_indicators")
+            g.add_edge("select_indicators", "enrich_indicators")
+            g.add_edge("enrich_indicators", "plan_queries")
+        else:
+            g.add_edge("correlate", "plan_queries")
         g.add_edge("plan_queries", "retrieve")
         g.add_edge("retrieve", "grade_documents")
         g.add_conditional_edges(
@@ -98,13 +117,59 @@ class AnalysisWorkflow:
         related = self.repo.find_related(state["alert"], window_hours=self.correlation_window_hours)
         return {"related_alerts": related, "trace": [f"correlate: {len(related)} related alert(s)"]}
 
+    def select_indicators(self, state: AgentState) -> AgentState:
+        """Choose which indicators to spend the threat-intel lookup budget on."""
+        assert self.intel is not None
+        alert, related = state["alert"], state.get("related_alerts", [])
+        own = self.intel.candidates(alert.indicators)
+        own_keys = {(i.type, i.value.lower()) for i in own}
+        from_related = [
+            i
+            for i in self.intel.candidates(ind for a in related for ind in a.indicators)
+            if (i.type, i.value.lower()) not in own_keys
+        ]
+        # The alert's own indicators come first, each group ordered by specificity.
+        candidates = [*own, *from_related][:MAX_INTEL_CANDIDATES]
+        budget = self.max_intel_lookups
+
+        if len(candidates) <= budget:
+            note = f"select_indicators: all {len(candidates)} candidate(s) within budget"
+            return {"intel_candidates": candidates, "trace": [note]}
+        try:
+            picked = self.llm.generate(
+                prompts.IndicatorSelection,
+                prompts.SYSTEM_ANALYST,
+                prompts.select_indicators_prompt(alert, candidates, budget),
+            ).selected
+            chosen = [candidates[i - 1] for i in _dedupe(picked) if 1 <= i <= len(candidates)]
+            if not chosen:
+                raise ValueError("model selected no valid indicators")
+            note = f"select_indicators: LLM chose {min(len(chosen), budget)}/{len(candidates)}"
+        except Exception as exc:
+            logger.warning("Indicator selection failed: %s", exc)
+            chosen = candidates
+            note = f"select_indicators: LLM failed, top {budget}/{len(candidates)} by priority"
+        return {"intel_candidates": chosen[:budget], "trace": [note]}
+
+    def enrich_indicators(self, state: AgentState) -> AgentState:
+        assert self.intel is not None
+        intel = self.intel.enrich(state.get("intel_candidates", []))
+        flagged = [i for i in intel if i.verdict in ("malicious", "suspicious")]
+        cached = sum(r.cached for i in intel for r in i.results)
+        note = f"enrich_indicators: {len(intel)} looked up, {len(flagged)} flagged"
+        if cached:
+            note += f", {cached} cached result(s)"
+        return {"intel": intel, "trace": [note]}
+
     def plan_queries(self, state: AgentState) -> AgentState:
         alert = state["alert"]
         try:
             planned = self.llm.generate(
                 prompts.SearchQueries,
                 prompts.SYSTEM_ANALYST,
-                prompts.plan_queries_prompt(alert, state.get("related_alerts", [])),
+                prompts.plan_queries_prompt(
+                    alert, state.get("related_alerts", []), state.get("intel", [])
+                ),
             ).queries
             note = f"plan_queries: {len(planned)} LLM queries"
         except Exception as exc:  # any model failure falls back to defaults
@@ -179,12 +244,13 @@ class AnalysisWorkflow:
     def assess_risk(self, state: AgentState) -> AgentState:
         alert = state["alert"]
         related = state.get("related_alerts", [])
-        baseline = heuristics.baseline_score(alert, related)
+        intel = state.get("intel", [])
+        baseline = heuristics.baseline_score(alert, related, intel)
         try:
             assessment = self.llm.generate(
                 RiskAssessment,
                 prompts.SYSTEM_ANALYST,
-                prompts.assess_prompt(alert, related, state.get("context", []), baseline),
+                prompts.assess_prompt(alert, related, state.get("context", []), baseline, intel),
             )
             # Keep the level consistent with the documented score bands.
             assessment.risk_level = heuristics.level_from_score(assessment.risk_score)
@@ -192,7 +258,7 @@ class AnalysisWorkflow:
         except Exception as exc:
             logger.warning("Risk assessment failed: %s", exc)
             assessment = heuristics.fallback_assessment(
-                alert, related, f"LLM unavailable: {type(exc).__name__}"
+                alert, related, f"LLM unavailable: {type(exc).__name__}", intel
             )
             note = f"assess_risk: LLM failed, heuristic score {assessment.risk_score}"
         assessment.mitre_techniques = _dedupe(
@@ -202,6 +268,7 @@ class AnalysisWorkflow:
 
     def recommend_actions(self, state: AgentState) -> AgentState:
         alert, assessment = state["alert"], state["assessment"]
+        intel = state.get("intel", [])
         summary = (
             f"Risk {assessment.risk_score}/100 ({assessment.risk_level}). {assessment.summary}\n"
             f"Rationale: {assessment.rationale}"
@@ -211,7 +278,11 @@ class AnalysisWorkflow:
                 prompts.RecommendationList,
                 prompts.SYSTEM_ANALYST,
                 prompts.recommend_prompt(
-                    alert, state.get("related_alerts", []), state.get("context", []), summary
+                    alert,
+                    state.get("related_alerts", []),
+                    state.get("context", []),
+                    summary,
+                    intel,
                 ),
             ).recommendations
             if not recs:
@@ -222,14 +293,16 @@ class AnalysisWorkflow:
             if serious and not any(r.phase == ResponsePhase.CONTAINMENT for r in recs):
                 added = [
                     r
-                    for r in heuristics.fallback_recommendations(alert, assessment.risk_level)
+                    for r in heuristics.fallback_recommendations(
+                        alert, assessment.risk_level, intel
+                    )
                     if r.phase == ResponsePhase.CONTAINMENT
                 ]
                 recs = [*added, *recs]
                 note += f", +{len(added)} containment step(s) added by guardrail"
         except Exception as exc:
             logger.warning("Recommendation generation failed: %s", exc)
-            recs = heuristics.fallback_recommendations(alert, assessment.risk_level)
+            recs = heuristics.fallback_recommendations(alert, assessment.risk_level, intel)
             note = f"recommend_actions: LLM failed, {len(recs)} playbook default(s)"
         return {"recommendations": recs, "trace": [note]}
 

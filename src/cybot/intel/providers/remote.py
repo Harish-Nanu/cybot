@@ -7,9 +7,9 @@ from typing import Any
 
 import httpx
 
-from cybot.intel.models import IntelResult, Verdict
 from cybot.intel.providers.base import IntelProvider
 from cybot.models.alert import Indicator, IndicatorType
+from cybot.models.intel import IntelResult, Verdict
 
 IT = IndicatorType
 

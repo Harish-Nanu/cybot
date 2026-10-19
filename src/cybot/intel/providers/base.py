@@ -6,8 +6,8 @@ from abc import ABC, abstractmethod
 import httpx
 
 from cybot.ingestion.extract import is_valid_ip
-from cybot.intel.models import IntelResult, Verdict
 from cybot.models.alert import Indicator, IndicatorType
+from cybot.models.intel import IntelResult, Verdict
 
 logger = logging.getLogger(__name__)
 

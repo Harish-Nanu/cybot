@@ -8,9 +8,9 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from cybot.ingestion.extract import dedupe_indicators
-from cybot.intel.models import IndicatorIntel, IntelResult
 from cybot.intel.providers import IntelProvider, is_public_ip
 from cybot.models.alert import Indicator, IndicatorType
+from cybot.models.intel import IndicatorIntel, IntelResult
 
 if TYPE_CHECKING:  # storage imports intel.models; avoid a runtime cycle
     from cybot.storage import AlertRepository
