@@ -30,3 +30,15 @@ def sample_alerts() -> list[NormalizedAlert]:
         for payload in json.loads((SAMPLES / f"{source}.json").read_text()):
             alerts.append(get_normalizer(source).normalize(payload))
     return alerts
+
+
+KNOWLEDGE_DIR = Path(__file__).resolve().parents[1] / "knowledge"
+
+
+@pytest.fixture
+def knowledge_base(tmp_path):
+    from cybot.rag import HashingEmbedder, KnowledgeBase
+
+    kb = KnowledgeBase(HashingEmbedder(), collection="test_kb", persist_path=tmp_path / "chroma")
+    kb.index_directory(KNOWLEDGE_DIR)
+    return kb
