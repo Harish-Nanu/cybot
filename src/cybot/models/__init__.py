@@ -5,5 +5,27 @@ from cybot.models.alert import (
     NormalizedAlert,
     Severity,
 )
+from cybot.models.analysis import (
+    AnalysisResult,
+    KnowledgeReference,
+    Likelihood,
+    Priority,
+    Recommendation,
+    ResponsePhase,
+    RiskAssessment,
+)
 
-__all__ = ["AlertCategory", "Indicator", "IndicatorType", "NormalizedAlert", "Severity"]
+__all__ = [
+    "AlertCategory",
+    "AnalysisResult",
+    "Indicator",
+    "IndicatorType",
+    "KnowledgeReference",
+    "Likelihood",
+    "NormalizedAlert",
+    "Priority",
+    "Recommendation",
+    "ResponsePhase",
+    "RiskAssessment",
+    "Severity",
+]
