@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, FastAPI
 from cybot import __version__
 from cybot.agent import OllamaLLM, StructuredLLM, ThreatAnalyzer
 from cybot.agent.checkpoint import build_checkpointer
-from cybot.api import alerts, analysis, health, intel, knowledge
+from cybot.api import actions, alerts, analysis, health, intel, knowledge
 from cybot.api.deps import Services, require_api_key
 from cybot.config import Settings, get_settings
 from cybot.ingestion.service import IngestionService
@@ -94,6 +94,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     api.include_router(analysis.router)
     api.include_router(knowledge.router)
     api.include_router(intel.router)
+    api.include_router(actions.router)
 
     app.include_router(health.router)
     app.include_router(api)

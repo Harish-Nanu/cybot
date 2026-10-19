@@ -72,7 +72,9 @@ class ResponsePolicy:
             return ApprovalMode.AUTO, f"policy allows automatic {action.type}"
         if mode == ApprovalMode.AUTO:
             return ApprovalMode.AUTO, f"{action.type} is non-disruptive"
-        return mode, f"policy requires {mode.replace('_', ' ')} for {action.type}"
+        if mode == ApprovalMode.REQUIRE_APPROVAL:
+            return mode, f"policy requires approval for {action.type}"
+        return mode, f"policy does not allow {action.type}"
 
     def _never_block_ip(self, value: str) -> bool:
         try:

@@ -16,7 +16,13 @@ router = APIRouter(tags=["analysis"])
 
 def run_analysis(services: Services, alert: NormalizedAlert) -> AnalysisResponse:
     analysis, trace = services.analyzer.analyze(alert)
-    return AnalysisResponse(alert=AlertSummary.from_alert(alert), analysis=analysis, trace=trace)
+    return AnalysisResponse(
+        alert=AlertSummary.from_alert(alert),
+        analysis=analysis,
+        actions=services.repo.list_actions(analysis_id=analysis.id),
+        awaiting_approval=services.analyzer.is_waiting(analysis.id),
+        trace=trace,
+    )
 
 
 def analyze_in_background(services: Services, alerts: list[NormalizedAlert]) -> None:
