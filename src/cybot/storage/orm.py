@@ -62,3 +62,20 @@ class IntelCacheRecord(Base):
     value: Mapped[str] = mapped_column(String(1024))
     fetched_at: Mapped[datetime] = mapped_column(DateTime)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class ResponseActionRecord(Base):
+    """Audit log of response actions; the payload holds the full event history."""
+
+    __tablename__ = "response_actions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    alert_id: Mapped[str] = mapped_column(ForeignKey("alerts.id", ondelete="CASCADE"), index=True)
+    # Not a foreign key: actions are planned before the analysis row is written.
+    analysis_id: Mapped[str] = mapped_column(String(36), index=True)
+    type: Mapped[str] = mapped_column(String(32))
+    target: Mapped[str] = mapped_column(String(1024))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)

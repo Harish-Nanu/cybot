@@ -34,6 +34,7 @@ def sample_alerts() -> list[NormalizedAlert]:
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parents[1] / "knowledge"
 INTEL_FILE = Path(__file__).resolve().parents[1] / "intel" / "local_iocs.csv"
+POLICY_FILE = Path(__file__).resolve().parents[1] / "policy" / "response_policy.toml"
 
 
 @pytest.fixture
@@ -91,6 +92,8 @@ def make_client(tmp_path):
                 "chroma_path": tmp_path / "chroma",
                 "knowledge_dir": KNOWLEDGE_DIR,
                 "intel_local_path": INTEL_FILE,
+                "response_policy_path": POLICY_FILE,
+                "checkpoint_path": tmp_path / "checkpoints.db",
                 "api_key": None,
                 **overrides,
             }

@@ -5,7 +5,14 @@ correlate -> [select_indicators -> enrich_indicators] -> plan_queries -> retriev
             |                    ^
             +--> rewrite_queries-+ (too little context, retry budget left)
 
-The threat-intel steps run only when intel providers are configured.
+    -> plan_response -> execute_actions --(actions pending approval)--> await_approval
+                               ^                                         |
+                               +---------- analyst decisions ------------+
+
+The threat-intel steps run only when intel providers are configured, and the response
+steps only when a response planner is configured. ``await_approval`` pauses the graph with
+``interrupt()``; the run is checkpointed under its analysis id and resumed with the
+analyst's decisions (see ``resume``).
 """
 
 from __future__ import annotations
@@ -14,9 +21,12 @@ import logging
 import operator
 from typing import Annotated, Literal, TypedDict
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 
 from cybot.agent import heuristics, prompts
+from cybot.agent.checkpoint import build_checkpointer
 from cybot.agent.llm import StructuredLLM
 from cybot.intel import IndicatorIntel
 from cybot.intel.service import ThreatIntelService
@@ -29,7 +39,9 @@ from cybot.models import (
     RiskAssessment,
     Severity,
 )
+from cybot.models.response import ActionStatus, ResponseAction
 from cybot.rag import KnowledgeBase, RetrievedChunk
+from cybot.response import ActionConnector, ResponsePlanner, SimulatedConnector
 from cybot.storage import AlertRepository
 
 logger = logging.getLogger(__name__)
@@ -44,6 +56,7 @@ _HASH_TYPES = {IndicatorType.MD5, IndicatorType.SHA1, IndicatorType.SHA256}
 
 
 class AgentState(TypedDict, total=False):
+    analysis_id: str
     alert: NormalizedAlert
     related_alerts: list[NormalizedAlert]
     intel_candidates: list[Indicator]
@@ -54,6 +67,7 @@ class AgentState(TypedDict, total=False):
     retrieval_attempts: int
     assessment: RiskAssessment
     recommendations: list[Recommendation]
+    actions: list[ResponseAction]
     trace: Annotated[list[str], operator.add]
 
 
@@ -69,8 +83,14 @@ class AnalysisWorkflow:
         correlation_window_hours: int = 24,
         intel: ThreatIntelService | None = None,
         max_intel_lookups: int = 8,
+        planner: ResponsePlanner | None = None,
+        connector: ActionConnector | None = None,
+        checkpointer: BaseCheckpointSaver | None = None,
     ) -> None:
         self.repo = repo
+        self.planner = planner
+        self.connector = connector or SimulatedConnector()
+        self.checkpointer = checkpointer or build_checkpointer(None)
         self.intel = intel if intel is not None and intel.providers else None
         self.max_intel_lookups = max_intel_lookups
         self.knowledge = knowledge
@@ -91,6 +111,9 @@ class AnalysisWorkflow:
         g.add_node("rewrite_queries", self.rewrite_queries)
         g.add_node("assess_risk", self.assess_risk)
         g.add_node("recommend_actions", self.recommend_actions)
+        g.add_node("plan_response", self.plan_response)
+        g.add_node("execute_actions", self.execute_actions)
+        g.add_node("await_approval", self.await_approval)
 
         g.add_edge(START, "correlate")
         if self.intel is not None:
@@ -108,11 +131,40 @@ class AnalysisWorkflow:
         )
         g.add_edge("rewrite_queries", "retrieve")
         g.add_edge("assess_risk", "recommend_actions")
-        g.add_edge("recommend_actions", END)
-        return g.compile()
+        if self.planner is not None:
+            g.add_edge("recommend_actions", "plan_response")
+            g.add_edge("plan_response", "execute_actions")
+            g.add_conditional_edges(
+                "execute_actions",
+                self.route_after_execution,
+                {"await_approval": "await_approval", "done": END},
+            )
+            g.add_edge("await_approval", "execute_actions")
+        else:
+            g.add_edge("recommend_actions", END)
+        return g.compile(checkpointer=self.checkpointer)
 
-    def run(self, alert: NormalizedAlert) -> AgentState:
-        return self.graph.invoke({"alert": alert, "retrieval_attempts": 0, "trace": []})
+    @staticmethod
+    def _config(analysis_id: str) -> dict:
+        return {"configurable": {"thread_id": analysis_id}}
+
+    def run(self, alert: NormalizedAlert, analysis_id: str) -> AgentState:
+        """Run until completion or until actions need approval (see ``is_waiting``)."""
+        return self.graph.invoke(
+            {"analysis_id": analysis_id, "alert": alert, "retrieval_attempts": 0, "trace": []},
+            self._config(analysis_id),
+        )
+
+    def resume(self, analysis_id: str, decisions: dict) -> AgentState:
+        """Continue a paused run with ``{"analyst": str, "decisions": [...]}``."""
+        return self.graph.invoke(Command(resume=decisions), self._config(analysis_id))
+
+    def is_waiting(self, analysis_id: str) -> bool:
+        snapshot = self.graph.get_state(self._config(analysis_id))
+        return "await_approval" in snapshot.next
+
+    def trace(self, analysis_id: str) -> list[str]:
+        return self.graph.get_state(self._config(analysis_id)).values.get("trace", [])
 
     # -- nodes ----------------------------------------------------------------
     def correlate(self, state: AgentState) -> AgentState:
@@ -316,6 +368,73 @@ class AnalysisWorkflow:
             recs = heuristics.fallback_recommendations(alert, assessment.risk_level, intel)
             note = f"recommend_actions: LLM failed, {len(recs)} playbook default(s)"
         return {"recommendations": recs, "trace": [note]}
+
+    # -- response ---------------------------------------------------------------
+    def plan_response(self, state: AgentState) -> AgentState:
+        assert self.planner is not None
+        actions, note = self.planner.plan(
+            alert=state["alert"],
+            analysis_id=state["analysis_id"],
+            assessment=state["assessment"],
+            recommendations=state.get("recommendations", []),
+            related=state.get("related_alerts", []),
+            intel=state.get("intel", []),
+        )
+        self.repo.save_actions(actions)
+        return {"actions": actions, "trace": [note]}
+
+    def execute_actions(self, state: AgentState) -> AgentState:
+        """Run every approved action through the connector and record the outcome."""
+        updated, ran = [], []
+        for action in state.get("actions", []):
+            if action.status == ActionStatus.APPROVED:
+                outcome = self.connector.execute(action)
+                action = action.model_copy(
+                    update={"connector": self.connector.name, "result": outcome.detail}
+                ).transition(outcome.status, f"connector:{self.connector.name}", outcome.detail)
+                ran.append(action)
+            updated.append(action)
+        if ran:
+            self.repo.save_actions(ran)
+        summary = ", ".join(
+            f"{sum(a.status == s for a in ran)} {s}"
+            for s in (ActionStatus.EXECUTED, ActionStatus.SIMULATED, ActionStatus.FAILED)
+            if any(a.status == s for a in ran)
+        )
+        pending = sum(a.status == ActionStatus.PENDING_APPROVAL for a in updated)
+        note = f"execute_actions: {summary or 'nothing to run'}"
+        if pending:
+            note += f"; {pending} awaiting approval"
+        return {"actions": updated, "trace": [note]}
+
+    def route_after_execution(self, state: AgentState) -> Literal["await_approval", "done"]:
+        pending = any(a.status == ActionStatus.PENDING_APPROVAL for a in state.get("actions", []))
+        return "await_approval" if pending else "done"
+
+    def await_approval(self, state: AgentState) -> AgentState:
+        """Pause for an analyst; resumes with their per-action decisions."""
+        pending = [a for a in state["actions"] if a.status == ActionStatus.PENDING_APPROVAL]
+        reply = interrupt(
+            {
+                "analysis_id": state["analysis_id"],
+                "alert_id": state["alert"].id,
+                "pending": [a.model_dump(mode="json") for a in pending],
+            }
+        )
+        analyst = str(reply.get("analyst") or "unknown")
+        decisions = {d["action_id"]: d for d in reply.get("decisions", [])}
+        updated, changed = [], []
+        for action in state["actions"]:
+            decision = decisions.get(action.id)
+            if decision and action.status == ActionStatus.PENDING_APPROVAL:
+                status = ActionStatus.APPROVED if decision["approve"] else ActionStatus.REJECTED
+                action = action.transition(status, analyst, decision.get("note") or "")
+                changed.append(action)
+            updated.append(action)
+        self.repo.save_actions(changed)
+        approved = sum(a.status == ActionStatus.APPROVED for a in changed)
+        note = f"await_approval: {analyst} approved {approved}, rejected {len(changed) - approved}"
+        return {"actions": updated, "trace": [note]}
 
 
 def _diversify(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:

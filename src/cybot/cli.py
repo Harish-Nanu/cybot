@@ -1,4 +1,4 @@
-"""Command-line interface: `cybot serve | index | ingest | analyze | intel | demo`."""
+"""Command-line interface: `cybot serve | index | ingest | analyze | intel | actions | demo`."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     for alert in result.alerts:
         print(f"  {alert.id}  [{alert.severity}] {alert.title}")
         if args.analyze:
-            _report(*services.analyzer.analyze(alert))
+            _report(services, *services.analyzer.analyze(alert))
 
 
 def cmd_analyze(args: argparse.Namespace) -> None:
@@ -63,7 +63,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     if args.json:
         _print_json({"analysis": analysis.model_dump(mode="json"), "trace": trace})
     else:
-        _report(analysis, trace)
+        _report(services, analysis, trace)
 
 
 def cmd_intel(args: argparse.Namespace) -> None:
@@ -101,10 +101,49 @@ def cmd_demo(args: argparse.Namespace) -> None:
     targets = sorted(ingested, key=lambda a: a.severity.rank, reverse=True)[: args.top]
     for alert in targets:
         print(f"\n=== {alert.title} ({alert.source}, {alert.severity}) ===")
-        _report(*services.analyzer.analyze(alert))
+        _report(services, *services.analyzer.analyze(alert))
 
 
-def _report(analysis, trace) -> None:
+def cmd_actions(args: argparse.Namespace) -> None:
+    from collections import defaultdict
+
+    from cybot.agent import Decision, DecisionError
+    from cybot.models import ActionStatus
+
+    services = _services()
+    if args.actions_command == "list":
+        status = ActionStatus(args.status) if args.status else None
+        actions = services.repo.list_actions(alert_id=args.alert, status=status)
+        if not actions:
+            print("No actions.")
+        for a in actions:
+            print(f"{a.id}  {a.status:<16} {a.type:<17} {a.target}")
+            print(f"    analysis {a.analysis_id}; {a.policy_reason}")
+        return
+
+    by_analysis: dict[str, list[Decision]] = defaultdict(list)
+    for action_id in args.action_ids:
+        action = services.repo.get_action(action_id)
+        if action is None:
+            sys.exit(f"Action {action_id} not found")
+        by_analysis[action.analysis_id].append(
+            Decision(action_id, args.actions_command == "approve", args.note)
+        )
+    for analysis_id, decisions in by_analysis.items():
+        try:
+            trace = services.analyzer.decide(analysis_id, decisions, args.analyst)
+        except DecisionError as exc:
+            sys.exit(str(exc))
+        for d in decisions:
+            a = services.repo.get_action(d.action_id)
+            print(
+                f"{a.id}  {a.status:<16} {a.type} {a.target}"
+                + (f"  ({a.result})" if a.result else "")
+            )
+        print("  Trace: " + " | ".join(trace))
+
+
+def _report(services, analysis, trace) -> None:
     a = analysis.assessment
     print(f"  Risk: {a.risk_score}/100 ({a.risk_level}), confidence {a.confidence:.0%}")
     print(f"  Summary: {a.summary}")
@@ -122,6 +161,11 @@ def _report(analysis, trace) -> None:
             print(f"    - {i.indicator.type}:{i.indicator.value} {i.verdict} ({i.score})")
     if analysis.references:
         print("  References: " + "; ".join(r.title for r in analysis.references))
+    actions = services.repo.list_actions(analysis_id=analysis.id)
+    if actions:
+        print(f"  Response actions (analysis {analysis.id}):")
+        for act in actions:
+            print(f"    - {act.status:<16} {act.type} {act.target}  [{act.id}]")
     print("  Trace: " + " | ".join(trace))
 
 
@@ -156,6 +200,20 @@ def build_parser() -> argparse.ArgumentParser:
     intel.add_argument("--type", help="Indicator type (auto-detected when omitted)")
     intel.add_argument("--json", action="store_true")
     intel.set_defaults(func=cmd_intel)
+
+    actions = sub.add_parser("actions", help="Review and approve response actions")
+    actions_sub = actions.add_subparsers(dest="actions_command", required=True)
+    act_list = actions_sub.add_parser("list", help="List actions (default: pending approval)")
+    act_list.add_argument("--status", default="pending_approval", help="Status filter, '' for all")
+    act_list.add_argument("--alert", help="Only actions for this alert id")
+    for verb in ("approve", "reject"):
+        decide = actions_sub.add_parser(verb, help=f"{verb.title()} pending actions")
+        decide.add_argument("action_ids", nargs="+")
+        decide.add_argument(
+            "--analyst", required=True, help="Your name (recorded in the audit log)"
+        )
+        decide.add_argument("--note", default="")
+    actions.set_defaults(func=cmd_actions)
 
     demo = sub.add_parser("demo", help="Ingest sample alerts and analyze the most severe")
     demo.add_argument("--top", type=int, default=2)

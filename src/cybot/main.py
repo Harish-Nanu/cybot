@@ -9,13 +9,15 @@ from fastapi import APIRouter, Depends, FastAPI
 
 from cybot import __version__
 from cybot.agent import OllamaLLM, StructuredLLM, ThreatAnalyzer
-from cybot.api import alerts, analysis, health, intel, knowledge
+from cybot.agent.checkpoint import build_checkpointer
+from cybot.api import actions, alerts, analysis, health, intel, knowledge
 from cybot.api.deps import Services, require_api_key
 from cybot.config import Settings, get_settings
 from cybot.ingestion.service import IngestionService
 from cybot.intel.providers import build_providers
 from cybot.intel.service import ThreatIntelService
 from cybot.rag import Embedder, KnowledgeBase, build_embedder
+from cybot.response import ActionConnector, ResponsePlanner, ResponsePolicy, build_connector
 from cybot.storage import AlertRepository, Database
 
 logger = logging.getLogger(__name__)
@@ -26,6 +28,7 @@ def build_services(
     *,
     llm: StructuredLLM | None = None,
     embedder: Embedder | None = None,
+    connector: ActionConnector | None = None,
 ) -> Services:
     db = Database(settings.database_url)
     db.create_all()
@@ -45,7 +48,27 @@ def build_services(
         intel = ThreatIntelService(providers, repo, cache_ttl_hours=settings.intel_cache_ttl_hours)
         logger.info("Threat intel providers: %s", ", ".join(intel.provider_names))
 
-    analyzer = ThreatAnalyzer(repo, kb, llm or OllamaLLM(settings), settings, intel)
+    llm = llm or OllamaLLM(settings)
+    planner = None
+    if settings.response_enabled:
+        planner = ResponsePlanner(llm, ResponsePolicy.load(settings.response_policy_path))
+        connector = connector or build_connector(settings)
+        logger.info(
+            "Response actions enabled (mode=%s, connector=%s)",
+            settings.response_mode,
+            connector.name,
+        )
+
+    analyzer = ThreatAnalyzer(
+        repo,
+        kb,
+        llm,
+        settings,
+        intel,
+        planner=planner,
+        connector=connector,
+        checkpointer=build_checkpointer(settings.checkpoint_path),
+    )
     return Services(
         settings=settings,
         repo=repo,
@@ -71,6 +94,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     api.include_router(analysis.router)
     api.include_router(knowledge.router)
     api.include_router(intel.router)
+    api.include_router(actions.router)
 
     app.include_router(health.router)
     app.include_router(api)

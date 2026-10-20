@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -50,6 +51,17 @@ class Settings(BaseSettings):
     intel_timeout_seconds: float = 10.0
     intel_cache_ttl_hours: int = 24
     intel_max_lookups: int = 8  # indicators enriched per analysis
+
+    # Automated response
+    response_enabled: bool = True
+    # dry_run: actions are only simulated; live: approved actions are sent to the webhook
+    response_mode: Literal["dry_run", "live"] = "dry_run"
+    response_policy_path: Path = PROJECT_ROOT / "policy" / "response_policy.toml"
+    response_webhook_url: str | None = None
+    response_webhook_secret: SecretStr | None = None
+    response_timeout_seconds: float = 10.0
+    # LangGraph checkpoints, so runs paused for approval survive restarts
+    checkpoint_path: Path = PROJECT_ROOT / "data" / "checkpoints.db"
 
 
 @lru_cache

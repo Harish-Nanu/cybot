@@ -3,8 +3,9 @@
 Cybot ingests security alerts from heterogeneous tools over REST, normalizes them into one
 schema, correlates them by shared indicators, enriches indicators with threat intelligence, and
 runs an **agentic RAG workflow** (LangGraph + a local LLM via Ollama) that produces a risk
-assessment and concrete response actions grounded in incident-response playbooks, MITRE ATT&CK
-notes and organization context.
+assessment and response recommendations grounded in incident-response playbooks, MITRE ATT&CK
+notes and organization context. It then carries out **response actions** under an approval
+policy: low-impact actions run automatically, and the rest pause for an analyst's decision.
 
 **Stack:** Python 3.12 · FastAPI · LangGraph · Ollama · ChromaDB · ONNX MiniLM embeddings · SQLAlchemy/SQLite
 
@@ -30,6 +31,12 @@ notes and organization context.
  │                          └── rewrite_queries (LLM) ◄┘ (bounded retries)      │
  │   ▼ enough context                                                           │
  │ assess_risk (LLM) ─► recommend_actions (LLM + containment guardrail)         │
+ │   ▼                                                                          │
+ │ plan_response (LLM → validated actions → approval policy)                    │
+ │   ▼                                                                          │
+ │ execute_actions (auto-approved) ──► await_approval (interrupt, checkpointed) │
+ │        ▲                                   │ analyst decisions via API/CLI   │
+ │        └───────────────────────────────────┘                                 │
  └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -51,6 +58,10 @@ notes and organization context.
    (severity, correlation, intel verdicts) is supplied as an anchor.
 6. **Recommendations** — prioritized actions per IR phase (investigation, containment,
    eradication, recovery, prevention) that name the specific hosts, accounts and IOCs.
+7. **Response actions** — the recommendations become executable actions (block, isolate, reset,
+   ticket), checked against an approval policy. Auto-approved actions run at once; the run then
+   pauses with a LangGraph `interrupt()` until an analyst approves or rejects the rest. Every
+   step is recorded in an audit log.
 
 Every LLM step has a deterministic fallback (heuristic scoring, similarity-based grading,
 playbook default actions), so analyses still complete when the model is down or returns
@@ -100,6 +111,10 @@ All `/api/v1` routes require `X-API-Key` when `CYBOT_API_KEY` is set. Interactiv
 | GET | `/api/v1/intel/providers` | Configured threat-intel providers |
 | POST | `/api/v1/intel/lookup` | Reputation of one indicator `{"value": "...", "type": null}` (type auto-detected) |
 | POST | `/api/v1/alerts/{id}/enrich?limit=` | Threat intel for a stored alert's indicators |
+| GET | `/api/v1/actions?status=pending_approval` | Approval queue; without a filter, the full action audit log (`alert_id`, `analysis_id` filters) |
+| GET | `/api/v1/actions/{id}` | One action with its audit trail |
+| GET | `/api/v1/alerts/{id}/actions` | Actions taken or proposed for an alert |
+| POST | `/api/v1/analyses/{id}/decisions` | Approve/reject pending actions and resume the paused run |
 | GET | `/api/v1/knowledge/stats` | Vector index stats |
 | POST | `/api/v1/knowledge/search` | Semantic search `{"query": "...", "k": 4}` |
 | POST | `/api/v1/knowledge/reindex` | Rebuild the index from `knowledge/` |
@@ -153,6 +168,12 @@ Environment variables (or `.env`, see `.env.example`), all prefixed with `CYBOT_
 | `INTEL_MAX_LOOKUPS` | `8` | Indicators enriched per analysis |
 | `INTEL_CACHE_TTL_HOURS` | `24` | Cache lifetime for remote results |
 | `INTEL_TIMEOUT_SECONDS` | `10` | Per-request timeout |
+| `RESPONSE_ENABLED` | `true` | Plan and execute response actions |
+| `RESPONSE_MODE` | `dry_run` | `dry_run` simulates every action; `live` sends approved actions to the webhook |
+| `RESPONSE_WEBHOOK_URL` | – | SOAR/automation endpoint for `live` mode (required in `live`) |
+| `RESPONSE_WEBHOOK_SECRET` | – | HMAC key for `X-Cybot-Signature` |
+| `RESPONSE_POLICY_PATH` | `policy/response_policy.toml` | Approval policy |
+| `CHECKPOINT_PATH` | `data/checkpoints.db` | LangGraph checkpoints (paused runs survive restarts) |
 
 The `sentence-transformers` backend needs the extra: `uv sync --extra sentence-transformers`.
 If you change the embedding backend, rebuild the index (`cybot index`).
@@ -184,6 +205,67 @@ curl -s -X POST localhost:8000/api/v1/intel/lookup -H 'content-type: application
 Free API tiers are rate-limited (e.g. VirusTotal: 4 requests/minute), so keep
 `CYBOT_INTEL_MAX_LOOKUPS` small; the cache absorbs repeat lookups.
 
+## Automated response
+
+### Actions and approval
+
+| Action | Target | Default policy |
+|---|---|---|
+| `block_ip`, `block_domain`, `block_url`, `block_hash` | indicator | auto (internal ranges and own domains are **denied**) |
+| `isolate_host` | host | auto; **approval** for protected hosts (`web-srv-01`, `vpn-gw-01`, `dc-01/02`) |
+| `disable_account`, `reset_credentials` | user | **approval** |
+| `open_ticket` | the alert | auto |
+
+How actions are produced and approved:
+
+- **Planning:** the LLM converts its recommendations into actions. Every target must be an
+  entity seen in the alert, its correlated alerts or the intel results, so invented hosts or IPs
+  are dropped.
+- **Guardrails:** intel-confirmed malicious indicators are always blocked, and medium-risk or
+  higher incidents always get a ticket. Without the LLM, a rule-based plan is used.
+- **Policy:** `policy/response_policy.toml` mirrors the escalation policy. Below
+  `min_auto_risk_score` (60), every disruptive action needs approval. Edit the file to match
+  your environment.
+- **Pausing:** a run waiting for approval is checkpointed in SQLite under its analysis id, so it
+  survives restarts. Decisions can be partial; the run pauses again until nothing is pending.
+
+```bash
+uv run cybot actions list                                   # approval queue
+uv run cybot actions approve <action-id> --analyst alice --note "confirmed"
+uv run cybot actions reject  <action-id> --analyst alice
+
+curl -s -X POST localhost:8000/api/v1/analyses/<analysis-id>/decisions \
+     -H 'content-type: application/json' \
+     -d '{"analyst": "alice", "decisions": [{"action_id": "<id>", "approve": true}]}'
+```
+
+Each action keeps an audit trail of `(time, status, actor, note)` entries. The actor is `policy`,
+the analyst's name, or `connector:<name>`.
+
+### Execution (dry-run vs. live)
+
+By default (`CYBOT_RESPONSE_MODE=dry_run`) nothing is changed: actions are marked `simulated`.
+In `live` mode, approved actions are POSTed to `CYBOT_RESPONSE_WEBHOOK_URL`, typically a SOAR
+or automation workflow (Tines, n8n, Shuffle, XSOAR) that calls the firewall, EDR or IdP. The
+POST body has this shape:
+
+```json
+{"event": "cybot.response_action",
+ "action": {"id": "...", "type": "isolate_host", "target": "WS-FIN-07", "reason": "...",
+            "priority": "immediate", "alert_id": "...", "analysis_id": "...", "...": "..."}}
+```
+
+Headers:
+
+- `X-Cybot-Delivery`: the action id, usable as an idempotency key.
+- `X-Cybot-Timestamp`: a Unix timestamp.
+- `X-Cybot-Signature`: `sha256=` followed by the HMAC-SHA256 of `"{timestamp}.{body}"` with
+  `CYBOT_RESPONSE_WEBHOOK_SECRET`. Receivers can verify it with
+  `cybot.response.verify_signature`, which also rejects stale timestamps.
+
+A 2xx response marks the action `executed`; anything else marks it `failed`, with the response
+recorded.
+
 ## Knowledge base
 
 `knowledge/` holds markdown documents with front matter (`title`, `type`, `tags`, `mitre`),
@@ -210,10 +292,12 @@ src/cybot/
   models/       NormalizedAlert, RiskAssessment, Recommendation, AnalysisResult
   storage/      SQLAlchemy models + repository (alerts, indicators, analyses)
   intel/        threat-intel providers (local, AbuseIPDB, VirusTotal, GreyNoise, URLhaus) + cached service
+  response/     action planner, approval policy, connectors (simulated, signed webhook)
   rag/          markdown chunking, embedders, Chroma knowledge base
-  agent/        LangGraph workflow, prompts, Ollama client, heuristic fallbacks
-  cli.py        cybot serve | index | ingest | analyze | demo
+  agent/        LangGraph workflow, checkpointing, prompts, Ollama client, heuristic fallbacks
+  cli.py        cybot serve | index | ingest | analyze | intel | actions | demo
 knowledge/      RAG source documents
 intel/          local IOC list
+policy/         response approval policy
 samples/        example vendor payloads forming one attack story
 ```

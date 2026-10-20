@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from cybot.models import AlertCategory, AnalysisResult, NormalizedAlert, Severity
+from cybot.models import AlertCategory, AnalysisResult, NormalizedAlert, ResponseAction, Severity
 
 
 class AlertSummary(BaseModel):
@@ -53,6 +53,8 @@ class IngestResponse(BaseModel):
 class AnalysisResponse(BaseModel):
     alert: AlertSummary
     analysis: AnalysisResult
+    actions: list[ResponseAction] = []
+    awaiting_approval: bool = False
     trace: list[str]
 
 

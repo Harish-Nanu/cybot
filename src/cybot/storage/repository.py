@@ -12,12 +12,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from cybot.models import AlertCategory, AnalysisResult, NormalizedAlert, Severity
 from cybot.models.intel import IntelResult
+from cybot.models.response import ActionStatus, ResponseAction
 from cybot.storage.orm import (
     AlertRecord,
     AnalysisRecord,
     Base,
     IndicatorRecord,
     IntelCacheRecord,
+    ResponseActionRecord,
 )
 
 
@@ -193,6 +195,52 @@ class AlertRepository:
                 s.add(record)
             record.fetched_at = _naive_utc(result.fetched_at)
             record.payload = result.model_dump(mode="json")
+
+    # -- response actions (audit log) ---------------------------------------
+    def save_actions(self, actions: Iterable[ResponseAction]) -> None:
+        """Insert or update actions (each status change is kept in the payload history)."""
+        with self.db.session() as s:
+            for action in actions:
+                record = s.get(ResponseActionRecord, action.id)
+                if record is None:
+                    record = ResponseActionRecord(
+                        id=action.id,
+                        alert_id=action.alert_id,
+                        analysis_id=action.analysis_id,
+                        type=action.type.value,
+                        target=action.target,
+                        created_at=_naive_utc(action.created_at),
+                    )
+                    s.add(record)
+                record.status = action.status.value
+                record.updated_at = _naive_utc(action.updated_at)
+                record.payload = action.model_dump(mode="json")
+
+    def get_action(self, action_id: str) -> ResponseAction | None:
+        with self.db.session() as s:
+            record = s.get(ResponseActionRecord, action_id)
+            return ResponseAction.model_validate(record.payload) if record else None
+
+    def list_actions(
+        self,
+        *,
+        alert_id: str | None = None,
+        analysis_id: str | None = None,
+        status: ActionStatus | None = None,
+        limit: int = 200,
+    ) -> list[ResponseAction]:
+        query = select(ResponseActionRecord)
+        if alert_id:
+            query = query.where(ResponseActionRecord.alert_id == alert_id)
+        if analysis_id:
+            query = query.where(ResponseActionRecord.analysis_id == analysis_id)
+        if status:
+            query = query.where(ResponseActionRecord.status == status.value)
+        query = query.order_by(ResponseActionRecord.created_at, ResponseActionRecord.id).limit(
+            limit
+        )
+        with self.db.session() as s:
+            return [ResponseAction.model_validate(r.payload) for r in s.scalars(query).all()]
 
     @staticmethod
     def _to_record(alert: NormalizedAlert) -> AlertRecord:
